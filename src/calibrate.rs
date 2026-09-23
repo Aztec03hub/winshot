@@ -456,6 +456,7 @@ mod tests {
         assert_eq!(Shape::Caps.ocr_ratio(&w("FILES (3), QUEUED")), 1.45);
         assert_eq!(Shape::Caps.ocr_ratio(&w("FILES SAVED")), 0.90);
         assert_eq!(Shape::Caps.ocr_ratio(&w("FILES QUEUED")), 1.45, "Q's tail drops below the baseline");
+        assert_eq!(Shape::Caps.ocr_ratio(&w("JOBS")), 1.45, "J drops below the baseline in some fonts");
         assert_eq!(text_box_ratio(&w("Quit added")), 1.0);
         assert_eq!(Shape::Digits.ocr_ratio(&w("1,234")), 1.45);
     }
