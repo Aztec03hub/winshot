@@ -98,7 +98,8 @@ impl Shape {
 /// ogoneks below). Unknown marks count too, so every guess errs toward more resolution.
 fn stretches_box(c: char) -> bool {
     const PLAIN: &str = "acemnorsuvwxz.:-=+~bdfhiklt!?&%#'\"*^`<>gpqy ";
-    !(c.is_ascii_uppercase() || c.is_ascii_digit() || PLAIN.contains(c))
+    // Q's tail and (in some fonts) J drop below the baseline, so they stretch a box too.
+    !((c.is_ascii_uppercase() && c != 'Q' && c != 'J') || c.is_ascii_digit() || PLAIN.contains(c))
 }
 
 /// OCR boxes a word from its highest to its lowest ink, so a lowercase line with no
@@ -453,7 +454,9 @@ mod tests {
         assert_eq!(text_box_ratio(&w("join main")), 1.0, "j drops below the baseline");
         assert_eq!(text_box_ratio(&w("façade")), 1.0, "a cedilla drops below");
         assert_eq!(Shape::Caps.ocr_ratio(&w("FILES (3), QUEUED")), 1.45);
-        assert_eq!(Shape::Caps.ocr_ratio(&w("FILES QUEUED")), 0.90);
+        assert_eq!(Shape::Caps.ocr_ratio(&w("FILES SAVED")), 0.90);
+        assert_eq!(Shape::Caps.ocr_ratio(&w("FILES QUEUED")), 1.45, "Q's tail drops below the baseline");
+        assert_eq!(text_box_ratio(&w("Quit added")), 1.0);
         assert_eq!(Shape::Digits.ocr_ratio(&w("1,234")), 1.45);
     }
 

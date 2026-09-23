@@ -86,7 +86,7 @@ struct Target {
     #[arg(long, value_parser = parse_region, allow_hyphen_values = true)]
     region: Option<Rect>,
     /// every display, one file each
-    #[arg(long)]
+    #[arg(long, conflicts_with = "stdout")]
     all: bool,
     /// process a saved PNG instead of capturing (e.g. a full-page browser capture)
     #[arg(long)]
@@ -394,7 +394,7 @@ fn shoot(o: Shot) -> Result<()> {
         let chosen = t.display.is_some() || t.region.is_some() || t.window.is_some() || t.pid.is_some() || t.exe.is_some();
         // For Claude, the whole desktop splits at monitor edges first: each monitor is
         // already a screen-shaped image, so no cut lands inside anything.
-        if !o.raw && !chosen && o.stdout {
+        if !o.raw && !chosen && !t.all && o.stdout {
             // One image to stdout: the primary display, not every monitor.
             let d = find_display(&ds, "primary")?;
             jobs.push(Job { frame: capture_display(&mut cap, d)?, displays: vec![d.index], rect: d.rect, label: d.name.clone(), suffix: None });
