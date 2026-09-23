@@ -1,0 +1,48 @@
+[package]
+name = "winshot"
+version = "0.1.0"
+edition = "2021"
+description = "Fast Windows screenshots driven from WSL: per-display, per-window, per-process"
+repository = "https://github.com/Aztec03hub/winshot"
+license = "MIT"
+
+# Windows-only by design: WSL has no access to the Windows desktop compositor,
+# so the capture binary must be Windows-native. See docs/DESIGN.md §1.
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+toml = "0.8"
+anyhow = "1"
+rayon = "1"
+fast_image_resize = "5"
+
+# Benchmark these three before committing to one; encode dominates the time budget.
+# image = "0.25"
+# zune-png = "0.4"
+# fpnge = "0.1"
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.58", features = [
+    "Graphics_Capture",
+    "Graphics_DirectX_Direct3D11",
+    "Win32_Graphics_Gdi",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Direct3D11",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_HiDpi",
+    "Win32_Foundation",
+    "Win32_System_Threading",
+    "Win32_Media_Audio",
+] }
+
+[features]
+default = []
+# OCR is heavy and used only by `winshot calibrate`; keep it opt-in.
+calibrate = []
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = true
