@@ -92,14 +92,17 @@ pub fn encode(f: &Frame, fmt: Format) -> Result<Encoded> {
 /// Largest side accepted for a --region or a --from image: a typo like 40000 would
 /// otherwise allocate gigabytes. Twice the widest real desktop is plenty.
 pub const MAX_SIDE: u32 = 32768;
+/// Largest area (pixels) accepted, so two in-range sides cannot still ask for gigabytes:
+/// 256 Mpx is ~770 MB of RGB, over ten times the biggest desktop here.
+pub const MAX_PIXELS: u64 = 256 << 20;
 
 pub fn decode_png(bytes: &[u8]) -> Result<Frame> {
     let mut d = png::Decoder::new(std::io::Cursor::new(bytes));
     d.set_transformations(png::Transformations::EXPAND | png::Transformations::STRIP_16);
     let mut r = d.read_info()?;
     let (iw, ih) = (r.info().width, r.info().height);
-    if iw > MAX_SIDE || ih > MAX_SIDE {
-        anyhow::bail!("{iw}x{ih} image is larger than {MAX_SIDE} px on a side");
+    if iw > MAX_SIDE || ih > MAX_SIDE || iw as u64 * ih as u64 > MAX_PIXELS {
+        anyhow::bail!("{iw}x{ih} image is too large (limit {MAX_SIDE} px on a side, {MAX_PIXELS} pixels)");
     }
     let mut buf = vec![0; r.output_buffer_size().unwrap_or(0)];
     let info = r.next_frame(&mut buf)?;

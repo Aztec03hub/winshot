@@ -162,22 +162,26 @@ Claude Code shrinks every image to <= 2000 px on the long edge before Claude see
 resize to fit shrinks text with the image, and on a tall page it destroys it. So by default
 winshot (the older spelling `--for-claude` is still accepted):
 
-1. OCRs the image and finds the **smallest text size with real content** (>= 24 letters);
-2. scales so that text lands at 8 px line height, **Claude's own measured threshold**
-   (random words it cannot guess, 2 fonts x lowercase/CAPS/digits: every case read at least
-   93% at 8 px; the worst needs 7; DESIGN §5d);
+1. OCRs the image and, per **letter shape** (lowercase text / CAPS / digits), finds the
+   smallest text size with real content, estimating each line's real height from the
+   letters in it (OCR boxes "added" at 78% of its real height, "mono" at 56%);
+2. scales so every shape stays at **Claude's own measured threshold** for it: text 9 px,
+   caps 7 px, digits 6 px (random words it cannot guess, 2 fonts, light and dark themes;
+   DESIGN §5d);
 3. keeps one image if fitting the long edge stays within 5% of that scale; otherwise keeps
    the text scale and **splits the long axis into balanced tiles**, cut in the blank row
    nearest each balance point (overlapping only where no blank row exists);
 4. splits a multi-monitor desktop at monitor edges first, and names tiles `-1of4`, `-2of4`...
 
-Measured: an 1800x11846 retina page becomes 3 tiles, 6,129 tokens, with its smallest text at
-8.2 px (plain fit: 2.9 px, and the raw file is rejected outright). A walkthrough with every stage's
+Measured: the 3840x2400 laptop screen becomes **one 1617x1008 image, 2,091 tokens**, and
+Claude reads back the same 97.5% of its words as from 3,243- and 4,564-token versions. A
+1800x17886 retina page becomes 5 tiles with its smallest text at 9 px (a plain fit: 1.9 px,
+and the raw file is rejected outright). A walkthrough with every stage's
 images is in the artifact linked from HANDOFF.md. Measuring costs 0.7 s on a screen and
 2.2 s on that page; `--max-detail` skips it when the image already fits.
 
-The rule errs large on caps-only or digit-only small text (OCR measures its box at cap
-height), which costs an extra tile, never legibility. `--text-scale` overrides it.
+Every estimate errs toward more resolution, never less; `--text-scale` overrides the
+measurement.
 
 **Token cost is exact.** Claude reads 28x28-px patches, one token each: `ceil(w/28) x
 ceil(h/28)`, and resizes anything over its tier's cap (high tier: 2576 px, 4784 tokens).

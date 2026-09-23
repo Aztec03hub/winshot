@@ -45,6 +45,10 @@ def image_block(path, strict=True):
 
 
 def words(text):
+    # Drop the "Image N:" labels Claude echoes from the prompt: they are not on screen,
+    # and a variant with fewer images would otherwise be charged for missing them.
+    text = re.sub(r"(?im)^\s*\**\s*image\s+\d+\s*:?\s*\**\s*$", " ", text)
+    text = re.sub(r"(?i)\bimage\s+\d+\s*:", " ", text)
     return [w.lower() for w in re.findall(r"[A-Za-z0-9]+", text)]
 
 
@@ -99,7 +103,7 @@ def main():
         spent["input"] += msg.usage.input_tokens
         spent["output"] += msg.usage.output_tokens
         truth_text = text
-        out["truth"] = {"kind": "Claude reading full-resolution references", "images": a.truth_images, "request_id": rid}
+        out["truth"] = {"kind": "Claude reading full-resolution references", "images": a.truth_images, "request_id": rid, "text": text}
     truth = words(truth_text)
     out["truth"]["words"] = len(truth)
     print(f"truth: {len(truth)} words ({out['truth']['kind']})")

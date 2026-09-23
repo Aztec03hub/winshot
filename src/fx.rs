@@ -8,7 +8,7 @@ use std::time::Duration;
 use windows::core::{w, PCWSTR};
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::Graphics::Gdi::{GetStockObject, HBRUSH, WHITE_BRUSH};
-use windows::Win32::Media::Audio::{PlaySoundW, SND_MEMORY, SND_SYNC};
+use windows::Win32::Media::Audio::{PlaySoundW, SND_MEMORY, SND_NODEFAULT, SND_SYNC};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
@@ -59,7 +59,7 @@ pub fn flash(rects: Vec<Rect>, ms: u32) -> JoinHandle<()> {
 pub fn shutter() -> JoinHandle<bool> {
     thread::spawn(|| {
         let wav = shutter_wav();
-        unsafe { PlaySoundW(PCWSTR(wav.as_ptr() as *const u16), None, SND_MEMORY | SND_SYNC).as_bool() }
+        unsafe { PlaySoundW(PCWSTR(wav.as_ptr() as *const u16), None, SND_MEMORY | SND_SYNC | SND_NODEFAULT).as_bool() }
     })
 }
 

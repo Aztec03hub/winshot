@@ -120,10 +120,10 @@ struct Shot {
     tier: tile::Tier,
     /// keep images that already fit at full size instead of shrinking them to their
     /// text-safe scale (more tokens, more non-text detail)
-    #[arg(long)]
+    #[arg(long, conflicts_with = "raw")]
     max_detail: bool,
     /// skip measuring and use this text-safe scale
-    #[arg(long, value_parser = parse_factor)]
+    #[arg(long, value_parser = parse_factor, conflicts_with = "raw")]
     text_scale: Option<f64>,
     /// --raw only: resampling off (default), auto (calibrated, else 1/DPI), or a factor like 0.5
     #[arg(long, value_parser = parse_scale, requires = "raw")]
@@ -153,8 +153,11 @@ struct Shot {
     #[arg(short, long)]
     verbose: bool,
     /// benchmark every encoder setting on this capture and exit
-    #[arg(long, hide = true)]
+    #[arg(long, hide = true, requires = "raw")]
     bench_encode: bool,
+    /// print every OCR text line (height, shape, position, words) and exit (analysis)
+    #[arg(long, hide = true)]
+    dump_text: bool,
 }
 
 #[derive(Clone, Copy)]
@@ -192,8 +195,8 @@ fn parse_region(s: &str) -> Result<Rect, String> {
     if v[2] <= 0 || v[3] <= 0 {
         return Err("width and height must be positive".into());
     }
-    if v[2] > encode::MAX_SIDE as i64 || v[3] > encode::MAX_SIDE as i64 {
-        return Err(format!("width and height must be at most {} px", encode::MAX_SIDE));
+    if v[2] > encode::MAX_SIDE as i64 || v[3] > encode::MAX_SIDE as i64 || (v[2] * v[3]) as u64 > encode::MAX_PIXELS {
+        return Err(format!("width and height must be at most {} px, and the area at most {} pixels", encode::MAX_SIDE, encode::MAX_PIXELS));
     }
     Ok(Rect { x: v[0] as i32, y: v[1] as i32, w: v[2] as u32, h: v[3] as u32 })
 }
@@ -392,7 +395,7 @@ fn shoot(o: Shot) -> Result<()> {
         // For Claude, the whole desktop splits at monitor edges first: each monitor is
         // already a screen-shaped image, so no cut lands inside anything.
         if t.all || (!o.raw && !chosen) {
-            if o.stdout {
+            if o.stdout && t.all {
                 bail!("--all writes one file per display; it cannot go to --stdout");
             }
             for d in &ds {
@@ -443,6 +446,14 @@ fn shoot(o: Shot) -> Result<()> {
     let base = o.out.clone().unwrap_or_else(|| format!("winshot-{}.{}", timestamp(), if format == Format::Webp { "webp" } else { "png" }).into());
     let calib = calibrate::load();
 
+    if o.dump_text {
+        for job in &jobs {
+            println!("# {} ({}x{}): px shape x,y wxh words", job.label, job.frame.w, job.frame.h);
+            calibrate::dump(&job.frame)?;
+        }
+        return Ok(());
+    }
+    let jobs_n = jobs.len();
     for job in jobs {
         if job.frame.rgb.iter().all(|&b| b == 0) {
             eprintln!("winshot: warning: {} captured as an entirely black frame (DRM-protected content, or a capture failure); saving it anyway", job.label);
@@ -458,6 +469,9 @@ fn shoot(o: Shot) -> Result<()> {
         if !o.raw {
             let tiles = for_claude(&o, &ds, &calib, &job)?;
             let n = tiles.len();
+            if o.stdout && jobs_n > 1 {
+                bail!("this capture came out as {jobs_n} displays, which cannot all go to --stdout; pick one with --display, write files with -o, or use --raw for one lossless image");
+            }
             if o.stdout && n > 1 {
                 bail!("this capture came out as {n} images, which cannot all go to --stdout; write files with -o, or use --raw for one lossless image");
             }
@@ -481,7 +495,7 @@ fn shoot(o: Shot) -> Result<()> {
             return bench_encode(&f);
         }
         if f.w.max(f.h) > tile::MAX_EDGE {
-            eprintln!("winshot: warning: {}x{} exceeds Claude's {} px limit and would be rejected there; --for-claude splits it", f.w, f.h, tile::MAX_EDGE);
+            eprintln!("winshot: warning: {}x{} exceeds Claude's {} px limit and would be rejected there; drop --raw to get tiles Claude can read", f.w, f.h, tile::MAX_EDGE);
         }
         let bytes = emit(&o, format, &f, &path(None), &job.label)?;
         // Resampling invents in-between colours that compress worse, so a mild downscale
@@ -516,6 +530,9 @@ fn emit(o: &Shot, format: Format, f: &Frame, path: &Path, label: &str) -> Result
     if o.stdout {
         std::io::stdout().lock().write_all(&enc.bytes)?;
     } else {
+        if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
+            std::fs::create_dir_all(dir).with_context(|| format!("creating {}", dir.display()))?;
+        }
         // One sequential write: cheap even onto a \\wsl.localhost path (DESIGN §1).
         std::fs::write(path, &enc.bytes).with_context(|| format!("writing {}", path.display()))?;
         println!("{} ({}x{})", path.display(), f.w, f.h);
@@ -563,13 +580,16 @@ fn for_claude(o: &Shot, ds: &[Display], calib: &std::collections::BTreeMap<Strin
     } else {
         match calibrate::text_scale(f)? {
             Some(v) => {
+                let shape = v.shape.unwrap_or(calibrate::Shape::Text);
                 let how = format!(
-                    "smallest text {:.0} px tall ({} of {} lines, e.g. \"{}\"), kept at >= {} px: Claude's measured threshold",
+                    "smallest text {:.0} px tall ({:?}, {} of {} lines, e.g. \"{}\"), kept at >= {} px: Claude's measured threshold for {:?}",
                     v.small.h,
+                    shape,
                     v.small.lines,
                     v.small.all_lines,
                     v.small.words.iter().take(8).cloned().collect::<Vec<_>>().join(" "),
-                    calibrate::SAFE_LINE_PX
+                    shape.safe_px(),
+                    shape
                 );
                 (v.scale, how)
             }

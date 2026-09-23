@@ -7,8 +7,8 @@ description: See the user's Windows desktop from WSL by taking screenshots Claud
 
 `winshot` (on PATH in WSL) captures the Windows desktop at true physical resolution. Its
 default output is sized for you: every file fits Claude's image limits, so nothing
-downstream shrinks it, and the smallest text on it is kept at least 8 px tall, the size
-Claude reads reliably. A tall or wide capture is split into tiles instead of being crushed.
+downstream shrinks it, and the smallest text on it is kept at the height Claude was
+measured to read reliably (9 px for lowercase, 7 for capitals, 6 for digits). A tall or wide capture is split into tiles instead of being crushed.
 An ordinary screenshot of the same screen would be shrunk on the way to you and can lose
 most of its text, so use winshot rather than any other capture method.
 

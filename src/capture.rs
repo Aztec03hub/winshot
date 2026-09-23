@@ -47,9 +47,9 @@ impl Frame {
             if x1 <= x0 {
                 return;
             }
-            let s = ((sy * src.w as i32 + (x0 - x)) * 3) as usize;
-            let d = ((dy * self.w as i32 + x0) * 3) as usize;
-            let n = ((x1 - x0) * 3) as usize;
+            let s = (sy as usize * src.w as usize + (x0 - x) as usize) * 3;
+            let d = (dy as usize * self.w as usize + x0 as usize) * 3;
+            let n = (x1 - x0) as usize * 3;
             self.rgb[d..d + n].copy_from_slice(&src.rgb[s..s + n]);
         }
     }

@@ -104,7 +104,7 @@ def mixed(tmp):
     print(f"  36px body only:              smallest {hb:.0f}px, text-safe x{safe_b:.3f} -> {len(tb)} image(s) at x{sb:.3f}")
     assert "even the short edge" not in ea + eb, "test geometry must not be short-edge limited"
     assert ha < hb * 0.7, "the status bar must be detected as the smallest text"
-    assert ha * sa >= 7.9, f"the status bar must stay at the 8 px threshold, got {ha * sa:.1f}px"
+    assert ha * sa >= 8.9, f"the status bar (lowercase, full-height line) must stay at the 9 px text threshold, got {ha * sa:.1f}px"
     assert safe_a > safe_b * 1.3, "the status bar, a small minority of the words, must raise the text-safe scale"
     print("OK mixed: the minority small text sets the scale; without it the scale drops")
 
@@ -127,7 +127,7 @@ def tall(tmp):
     print(f"  1600x16000 page, smallest text {h:.0f}px: x{s:.3f} -> {len(tiles)} tiles {tiles[0]}..{tiles[-1]}")
     print(f"  a plain fit-to-2000 resize would be x{naive:.3f}: text {h * naive:.1f}px")
     assert all(max(t) <= 2000 for t in tiles), "every tile within the long edge"
-    assert h * s >= 7.9, f"text must stay at the 8 px threshold, got {h * s:.1f}px"
+    assert h * s >= 8.9, f"text must stay at the 9 px text threshold, got {h * s:.1f}px"
     overlapped = int(grab(r"(\d+) overlapped", err))
     assert overlapped == 0, f"paragraph gaps exist, so every seam should be blank; {overlapped} overlapped"
     print(f"OK tall: {len(tiles)} tiles, text {h * s:.1f}px instead of {h * naive:.1f}px, every seam between lines")

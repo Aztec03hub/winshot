@@ -291,10 +291,13 @@ long one: an 1800x11846 retina page fit to 2000 px is x0.169, and its smallest t
 
 1. Measure: OCR the full-resolution image (in bands cut at blank rows when it exceeds the
    engine's 10000 px maximum) and find the smallest text size (§5, same rule).
-2. Scale so that text lands at `SAFE_LINE_PX = 8`, the height measured on Claude itself
-   (§5d): `s = 8 / h`. OCR is the ruler here, not the judge: it needs ~10 px, so letting it
-   verify would push every scale back up to its own limit. With too little text to
-   measure, fall back to calibrated or 1/DPI, and say so.
+2. Group the lines by **letter shape** (lowercase text / CAPS / digits), estimate each
+   group's smallest real line height from its OCR boxes (§5d: a box only spans the
+   letters it contains), and scale so every group stays at or above the height Claude was
+   measured to read for that shape: **text 9 px, caps 7 px, digits 6 px**. The most
+   demanding group sets the scale. OCR is the ruler here, not the judge: it needs ~10 px,
+   so letting it verify would push every scale back up to its own limit. With too little
+   text to measure, fall back to calibrated or 1/DPI, and say so.
 3. Fit or split: if fitting the long edge is within 5% of `s`, one image. (3840 wide at
    2000 px is x0.521, so a measured x0.53 still gives one image.) Otherwise keep `s` and
    split the long axis (wide images are transposed, so one code path serves both).
@@ -308,17 +311,16 @@ long one: an 1800x11846 retina page fit to 2000 px is x0.169, and its smallest t
 
 Measured on this machine (`winshot -v`):
 
-| input | smallest text | fit would be | output | smallest text after |
-|---|---|---|---|---|
-| retina page 1800x11846 | 17 px, 82 of 303 lines | x0.169 (2.9 px) | 3 tiles at x0.485, all seams blank | 8.2 px |
-| DISPLAY1 3840x2400 | 13 px caps labels, 5 of 90 lines | x0.521 (6.8 px) | 2 tiles at x0.620, blank-column seam | 8.1 px |
-| whole desktop 5760x2711 | per monitor | x0.347 | DISPLAY1 as above + DISPLAY5 unchanged (8 px digits) | 8 px |
+| input | binding text | fit would be | output |
+|---|---|---|---|
+| retina page 1800x17886 | 17 px lowercase code (brackets: full-height box) | x0.112 (1.9 px) | 5 tiles at x0.533, all seams blank |
+| DISPLAY1 3840x2400 (diff page) | 15 px CAPS labels | x0.521 | **1 image at x0.421** (1617x1008) |
+| whole desktop 5760x2711 | per monitor | x0.347 | one file per monitor, each by its own text |
 
-Measuring costs 0.2-0.7 s (one OCR pass; longer on tall pages, which OCR in bands), and is
-skipped with `--max-detail` when the image already fits. The DISPLAY1 row is the caps effect
-above: its labels measure 13 px but render at ~16 px, so x0.521 would leave them at ~8.6 px,
-inside Claude's range. The rule spends a second tile for margin; `--text-scale 0.52` accepts
-the thinner margin as one image.
+Measuring costs 0.2-1.2 s (one OCR pass; longer on tall pages, which OCR in bands), and is
+skipped with `--max-detail` when the image already fits. The rule cannot tell real UI text
+from text inside a picture: a screen showing screenshot thumbnails protects their tiny text
+too (seen live: 9 px labels inside an embedded thumbnail forced 2 tiles).
 `--long-edge` sets the target (256-8000). Every output is <= 8000 px by construction, and a
 normal capture larger than that warns that Claude would reject it.
 
@@ -368,45 +370,68 @@ formats would lose text for nothing.
    scale instead of sent at full size. `--max-detail` keeps full size for non-text detail.
    A 1920x1080 image whose smallest text is safe at x0.6 drops from 2,691 to 1,008 tokens (-63%).
 
-Exact tokens, confirmed by `count_tokens` on every output image (8 of 8 matched):
+How the laptop screen (DISPLAY1, the diff page) moved as the rule was refined; exact
+tokens, confirmed with `count_tokens`, and read fidelity from `scripts/fidelity-check.py`
+(Claude transcribing each version against its own full-resolution reading, 241 words):
 
-| input | as-is (what Claude sees) | OCR's 10 px threshold | **Claude's 8 px threshold** |
+| rule | output | tokens | words read back |
 |---|---|---|---|
-| retina page 1800x11846 | 304x2000 = 795 tokens, text 2.9 px | 9,324 (4 tiles) | **6,129** (3 tiles), -34% |
-| DISPLAY1 3840x2400 | 2000x1250 = 3,243 tokens, text 6.8 px | 7,062 (2 tiles) | **4,564** (2 tiles), -35% |
-| DISPLAY5 1920x1080 | 2,694 tokens | 2,694 | 2,694 (8 px digits: cannot shrink) |
+| OCR's 10 px, one threshold | 2 tiles | 7,062 | not measured |
+| Claude's 8 px, one threshold | 2 tiles | 4,564 | 97.9% |
+| per-shape thresholds | 1 image, x0.521 | 3,243 | 97.5% |
+| **+ letter-class box ratios** | **1 image, x0.421** | **2,091** | **97.5%** |
 
-Tokens scale with the square of the scale, so the threshold is the lever that matters most.
+-70% tokens with no measurable read loss: every version misses the same half-scrolled-off
+code line, and the 0.4-point gap is a single "3". (An earlier run reported 94.0% vs 98.4%;
+that was a scoring artifact, the reference's "Image 1:"..."Image 4:" labels counted as
+words. `fidelity-check.py` strips them now.) Tokens scale with the square of the scale, so
+the threshold and the height estimate are the levers that matter most.
 
 ### 5d. Claude's own legibility threshold (measured)
 
-`scripts/claude-legibility.py`, run 2026-09-23 on claude-opus-5-5 (48 calls, effort low;
-estimated $0.40 beforehand, actual usage not logged): lines of random words (nothing to
-guess from context), in Consolas and Segoe UI, as lowercase, ALL CAPS and digits,
-downscaled so the rendered line lands at 5-16 px, and Claude asked to transcribe them. Word
-recall against the ground truth. (The script labelled its lowercase case "mixed" at the
-time; a review caught it. It is relabelled here, and the script now also has a real
-Mixed Case set, not yet run.)
+`scripts/claude-legibility.py` on claude-opus-5-5, effort low, 2026-09-23: lines of random
+words (nothing to guess from context), Consolas and Segoe UI, downscaled so the rendered line
+lands at 5-16 px, and Claude asked to transcribe them; word recall against the ground truth.
+Three runs: light theme (48 calls), dark theme (64), and a fill run (22) that retried
+refused cells with new words and added 9 px and light Mixed Case. Worst font and theme per
+cell ("r" = refused: random letter strings can trip a classifier; no data, not a pass):
 
-| font / shape | 5 px | 6 px | 7 px | 8 px | 10 px | threshold (90% of full size) |
+| shape | 5 px | 6 px | 7 px | 8 px | 9 px | 10 px |
 |---|---|---|---|---|---|---|
-| Consolas lowercase | 57% | 97% | 95% | 100% | 100% | 6 px |
-| Consolas CAPS | 42% | 92% | 100% | 100% | 100% | 6 px |
-| Consolas digits | 97% | 98% | 100% | 100% | 100% | 5 px |
-| Segoe UI lowercase | 5% | 62% | 92% | 93% | 98% | **7 px** (worst) |
-| Segoe UI CAPS | 82% | refused | 100% | 98% | 100% | 7 px |
-| Segoe UI digits | 98% | 100% | 100% | 100% | 100% | 5 px |
+| lowercase (Segoe, dark) | 5% | 58% | 87% | 90-93% | 97% | 100% |
+| Mixed Case (Segoe, dark) | r | r | 78-87% | r (x2) | 98% | 95% |
+| Mixed Case (Segoe, light) | - | - | r | r | 95% | - |
+| lowercase / Mixed (Consolas, dark) | r | 77-87% | 90-93% | 95-97% | 98% | 100% |
+| CAPS (worst of all four) | 27% | 83% | 98% | 98% | - | 100% |
+| digits (worst of all four) | 97% | 98% | 100% | 100% | - | 100% |
 
-Full size read 100% in every case. One call returned a refusal (random letter strings can
-trip a classifier); it counts as no data, not a pass. Caps are *not* harder for Claude.
+Full size read 100% in every case. **Thresholds used** (`calibrate::Shape::safe_px`):
+text **9 px** (Segoe lowercase and Mixed Case on dark are borderline at 8 and 95-98% at 9),
+caps **7 px** (98-100% at 7 in every font and theme), digits **6 px**. Dark themes are
+harder than light for lowercase; caps and digits are not.
 
-`SAFE_LINE_PX = 8`: the worst case needs 7, and at 8 every font and shape held at least
-93%. OCR measures a line at 0.79-1.00x its rendered height (§5), so applying this rendered-px
-threshold to OCR heights only ever errs toward more resolution.
+**From OCR boxes to real line height.** Windows OCR boxes a word from its highest to its
+lowest ink, so the box depends on the letters in it. Measured on Consolas and Segoe UI,
+light and dark, box / (ascender top to descender bottom):
 
-Not covered: light-on-dark and low-contrast colour text, ClearType subpixel rendering,
-other fonts and languages, and effort levels other than low. Real text with context is
-easier to read than random words, so the result should be conservative there.
+| letters in the line | box ratio (all four agree within 0.04) |
+|---|---|
+| tall and dropping (`height`) | 1.000 |
+| tall only, no g/j/p/q/y (`added`) | 0.769-0.778 |
+| dropping only | 0.744-0.778 |
+| x-height only (`mono`) | 0.513-0.556 |
+| CAPS / digits | 0.718-0.722 |
+
+A lowercase line's real height is its box divided by the largest ratio for its letter class,
+so the estimate errs small and the scale large; brackets, commas and slashes, which can
+stretch a box both ways, count as full height. Without this, "added removed" (17 px box, 22 px
+real) read 22% too small and forced the laptop to x0.529 instead of x0.421. The smallest
+group also needs real content at its own size (12+ characters within 10%), so a lone 3-letter
+tab title just under a group of labels cannot pin the whole group to its size.
+
+Not covered: low-contrast colour text, ClearType subpixel rendering, other fonts and
+languages, and effort levels other than low. Real text with context is easier to read than
+random words, so the thresholds should be conservative there.
 
 ### Resampling filter
 
@@ -480,8 +505,11 @@ extra dependency. `rayon` was dropped: nothing needed it.
 4. **`PrintWindow` fallback**: add it only if a real WGC failure is observed.
 5. **Calibration on more content**: `RETAIN` rests on a synthetic sweep and a handful of
    real captures; more content types (browser UI, small fonts) would firm it up.
-6. **Caps-only small text** makes the default mode err large (extra tiles). Normalising line
-   height by letter shape (cap height vs ascender/descender) would tighten it.
-7. **Claude's threshold on dark themes and colour text**: §5d measured dark-on-light
-   greyscale only. Rerun `scripts/claude-legibility.py` with inverted colours to cover them.
+6. **Sharp insets** (not built): the main image at body-text scale plus tiny crops of the
+   few thin strips holding the smallest text (tab bar, legend, clock). Estimated 15-25%
+   fewer tokens on screens like the laptop's; unmeasured.
+7. **Ruled out by Phil (2026-09-23):** altering colours (pre-sharpening, contrast boosts),
+   sending an OCR transcript alongside the image (OCR errors would reach Claude as fact),
+   and collapsing blank space (distorts layout and positions). Token savings must keep
+   pixels' colours, the layout, and Claude reading the image itself.
 

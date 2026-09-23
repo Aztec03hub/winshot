@@ -44,8 +44,9 @@ So this rig **is** mixed-DPI, the hard case, and it is handled. The regression o
 - "~5x faster than v0": 1.5x faster than a *correct* v0 (413-443 ms vs 641-671 ms).
 - "OCR agreement >= 99.5%": unreachable with Windows OCR; calibration uses word recall
   relative to OCR's own noise floor, scored on the **smallest text size only** (DESIGN §5).
-  Windows OCR needs ~10 px; **Claude itself reads random words down to 6-7 px** (measured,
-  DESIGN §5d), so the default mode uses `SAFE_LINE_PX = 8` with OCR as the ruler, not the judge.
+  Windows OCR needs ~10 px; **Claude itself** reads lowercase at 9 px, caps at 7 and digits
+  at 6, in light and dark themes (measured, DESIGN §5d), so the default mode uses those
+  per-shape thresholds with OCR as the ruler, not the judge.
 
 ## State of each original build step
 

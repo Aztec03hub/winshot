@@ -21,7 +21,7 @@ from PIL import Image, ImageDraw, ImageFont
 FONTS = {"consolas": "/mnt/c/Windows/Fonts/consola.ttf", "segoe": "/mnt/c/Windows/Fonts/segoeui.ttf"}
 SHAPES = {"lower": str.lower, "mixed": str.capitalize, "caps": str.upper, "digits": None}
 # Target line heights in px after downscaling; the OCR sweep put its threshold at ~10.
-HEIGHTS = [5, 6, 7, 8, 10, 12, 16]
+HEIGHTS = [5, 6, 7, 8, 9, 10, 12, 16]
 RENDER_PX = 40  # render big, then downscale: the result is what a screenshot would carry
 
 
@@ -77,12 +77,15 @@ def main():
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--theme", choices=list(THEMES), default="light")
     ap.add_argument("--shapes", nargs="*", default=list(SHAPES), help=f"subset of {list(SHAPES)}")
+    ap.add_argument("--fonts", nargs="*", default=list(FONTS), help=f"subset of {list(FONTS)}")
+    ap.add_argument("--heights", nargs="*", type=int, default=None, help="subset of target heights (full size is always included)")
+    ap.add_argument("--seed", default="", help="salt for the random words, e.g. to retry cells a classifier refused")
     a = ap.parse_args()
     cases = []
-    for fname, fpath in FONTS.items():
+    for fname, fpath in ((f, FONTS[f]) for f in a.fonts):
         for shape in a.shapes:
-            img, truth, line_h = render(fpath, shape, seed=zlib.crc32(f"{fname}/{shape}".encode()), theme=a.theme)
-            for target in [None, *HEIGHTS]:  # None = full size, the reference
+            img, truth, line_h = render(fpath, shape, seed=zlib.crc32(f"{fname}/{shape}{a.seed}".encode()), theme=a.theme)
+            for target in [None, *(a.heights or HEIGHTS)]:  # None = full size, the reference
                 s = 1.0 if target is None else target / line_h
                 im = img if target is None else img.resize((max(1, round(img.width * s)), max(1, round(img.height * s))), Image.LANCZOS)
                 cases.append((fname, shape, target or round(line_h), im, truth))
