@@ -1,0 +1,45 @@
+{
+  "skill_name": "winshot",
+  "evals": [
+    {
+      "id": 1,
+      "name": "laptop-screen-read",
+      "prompt": "what's on my laptop screen right now? is there any error or warning showing anywhere on it?",
+      "expected_output": "A description of what is on the primary display, from a winshot capture of that display only, with every printed tile read.",
+      "files": [],
+      "assertions": [
+        "Captured with winshot, not PowerShell / System.Windows.Forms / another tool",
+        "Captured only the laptop (primary) display, not the whole desktop",
+        "Wrote the capture under /tmp or a scratch dir, not the current directory",
+        "Read every image path winshot printed",
+        "The answer names the application(s) visible and says whether an error or warning is showing"
+      ]
+    },
+    {
+      "id": 2,
+      "name": "capcut-window-details",
+      "prompt": "check CapCut for me - what's the name of the project that's open, and how long is the audio clip on the timeline?",
+      "expected_output": "The CapCut project name and the clip duration, from a winshot capture of the CapCut window (not a whole-desktop capture).",
+      "files": [],
+      "assertions": [
+        "Captured with winshot, not PowerShell / System.Windows.Forms / another tool",
+        "Targeted the CapCut window (--window, --exe or an hwnd), not a whole display or desktop",
+        "Wrote the capture under /tmp or a scratch dir, not the current directory",
+        "Read every image path winshot printed",
+        "The answer gives a project name and a clip duration"
+      ]
+    },
+    {
+      "id": 3,
+      "name": "save-second-monitor-raw",
+      "prompt": "grab a full-resolution screenshot of my second monitor and save it to C:\\Users\\plafayette\\Pictures\\winshot-skill-test\\<name>.png so I can look at it later",
+      "expected_output": "One lossless PNG of DISPLAY5 at its physical 1920x1080, at exactly the requested path.",
+      "files": [],
+      "assertions": [
+        "A PNG exists at exactly the requested path",
+        "The saved PNG is the second monitor at full physical resolution (1920x1080)",
+        "Used winshot --raw (one lossless file), so no tiles or downscaled copy were saved instead"
+      ]
+    }
+  ]
+}

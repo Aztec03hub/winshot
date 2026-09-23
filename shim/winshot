@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# WSL front-end for winshot.exe (the capture itself must run on Windows).
+# Relative paths need no help: a Windows process launched from WSL gets the
+# \\wsl.localhost\... cwd. This only translates absolute WSL paths going in
+# and the Windows paths winshot.exe prints coming out.
+set -uo pipefail
+EXE="${WINSHOT_EXE:-@WINSHOT_EXE@}"
+[[ -x "$EXE" ]] || { echo "winshot: $EXE not found; run install.sh or set WINSHOT_EXE" >&2; exit 127; }
+
+args=() raw=0 take=0
+for a in "$@"; do
+  if (( take )); then
+    [[ "$a" == /* ]] && a=$(wslpath -w "$a")
+    take=0
+  else
+    case "$a" in
+      -o | --out | --from | --wav) take=1 ;;
+      --out=/* | --from=/* | --wav=/*) a="${a%%=*}=$(wslpath -w "${a#*=}")" ;;
+      -o=/*) a="-o=$(wslpath -w "${a#-o=}")" ;;
+      -o/*) a="-o$(wslpath -w "${a#-o}")" ;;
+      -[a-zA-Z]*o) take=1 ;; # clustered short flags ending in -o, e.g. -vo PATH
+      --stdout | -h | --help | -V | --version) raw=1 ;;
+    esac
+  fi
+  args+=("$a")
+done
+
+# Binary image data or help text: pass straight through.
+(( raw )) && exec "$EXE" "${args[@]}"
+
+"$EXE" "${args[@]}" | while IFS= read -r line; do
+  line=${line%$'\r'}
+  # "<path> (WxH)" and "wav: <path> (...)" result lines: map an absolute Windows
+  # path back to WSL.
+  if [[ "$line" =~ ^(wav:\ )?(([A-Za-z]:\\|\\\\).*)\ \(([^()]*)\)$ ]]; then
+    line="${BASH_REMATCH[1]}$(wslpath -u "${BASH_REMATCH[2]}") (${BASH_REMATCH[4]})"
+  fi
+  printf '%s\n' "$line"
+done
+exit "${PIPESTATUS[0]}"

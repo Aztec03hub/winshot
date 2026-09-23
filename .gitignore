@@ -1,16 +1,10 @@
 /target
 **/*.rs.bk
-Cargo.lock
-
-# generated assets
-/assets/shutter.wav
 
 # captures
 *.png
 *.webp
-winshot-*.png
 !docs/**/*.png
 
-# per-display calibration cache
-/config.toml
-.winshot.toml
+# skill eval runs (skill-creator workspace)
+/skill/winshot-workspace/

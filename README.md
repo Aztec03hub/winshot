@@ -1,132 +1,224 @@
 # winshot
 
-Fast screenshots of a **Windows** desktop, driven from **WSL**.
+Screenshots of a **Windows** desktop **for LLMs**, driven from **WSL**.
 
-Enumerate displays and windows, capture one monitor / one window / one process / an
-arbitrary region, and get a small file back without losing text legibility.
+Capture one monitor / one window / one process / an arbitrary region at true physical
+resolution, and get back images sized so Claude can read every word on them: the smallest
+text is measured and kept legible, long images are split into tiles, and nothing
+downstream resizes them. `--raw` gives a lossless, full-resolution original instead.
 
-> **Status: design complete, implementation pending.**
-> `legacy/` holds the working v0 (bash + PowerShell). The Rust rewrite is specified in
-> [`docs/DESIGN.md`](docs/DESIGN.md) and briefed in [`HANDOFF.md`](HANDOFF.md).
+> **Status: working.** Rust binary (`src/`) + WSL shim (`shim/`), built and verified on
+> the target machine. Measurements behind every claim are in [`docs/DESIGN.md`](docs/DESIGN.md);
+> what is still open is in [`HANDOFF.md`](HANDOFF.md). `legacy/` holds the v0, now DPI-fixed.
+
+---
+
+## For LLM agents
+
+```bash
+winshot                      # every monitor; prints one output path per line
+winshot --window "CapCut"    # one window (title substring, or an hwnd from `winshot list windows`)
+winshot --display 1          # one monitor
+```
+
+Read **every** path it prints, in order: a tall or wide capture comes back as tiles named
+`-1of3`, `-2of3`, ... in reading order, and a whole-desktop capture as one file per monitor
+(`-DISPLAY1`, `-DISPLAY5`). Each file is already inside Claude's image limits, so the text
+size winshot checked is the size you see. `-v` adds, per file, the exact token cost.
+
+`winshot --raw` is for a person: one lossless PNG exactly as on screen, which Claude Code
+would itself shrink to 2000 px (and a tall one to unreadable).
 
 ---
 
 ## Why this exists
 
 WSL has no access to the Windows desktop compositor, so a Linux binary **cannot** capture
-the Windows screen no matter what language it is written in. Something Windows-native has
-to do the capture. The v0 shelled out to PowerShell; that works but is slow and, it turns
-out, silently wrong.
+the Windows screen, in any language. Something Windows-native has to do the capture. The
+v0 shelled out to PowerShell; that worked but was silently wrong.
 
 ### The bug that motivated the rewrite
 
-PowerShell's `System.Windows.Forms` is **DPI-unaware**. On this machine:
+PowerShell's `System.Windows.Forms` is **DPI-unaware** unless told otherwise, and Windows
+then hands it logical pixels with no error. On this machine (mixed DPI):
 
-| display | physical | logical | scaling |
+| display | physical | logical (what v0 got) | scaling |
 |---|---|---|---|
-| DISPLAY1 | 3840x2400 | 1920x1200 | 200% |
-| DISPLAY5 | 3072x1728 | 1536x864 | 200% |
-| **virtual desktop** | **6912x4338** | **3456x2169** | |
+| DISPLAY1 (primary) | 3840x2400 | 1920x1200 | 200% |
+| DISPLAY5 | 1920x1080 | 1536x864 | 125% |
+| **virtual desktop** | **5760x2711** | **3456x2169** | |
 
-The v0 captures the **logical** 3456x2169 — half the linear resolution, a **4x pixel
-loss** — and never says so. Any DPI-scaled display has been quietly losing detail.
+v0 captured the logical 3456x2169: **4x fewer pixels on DISPLAY1, 1.56x fewer on DISPLAY5**,
+2.08x overall, and never said so.
 
-A correct implementation must declare `PER_MONITOR_AWARE_V2` before touching any
-capture API.
+winshot fixes it at three levels:
+
+1. `PER_MONITOR_AWARE_V2` is declared in the **embedded manifest** (`build.rs`), not a runtime call.
+2. At startup it **asserts** the process really is PMv2, and that every monitor's rect equals
+   its display *mode* (which is physical by definition). Any mismatch aborts with an error.
+3. Every monitor frame must be exactly the monitor's physical size, or nothing is saved.
+
+A silent downscale can no longer happen; the worst case is a loud refusal. `--verbose`
+prints physical and logical resolution for every display involved, so a regression is visible.
 
 ---
 
-## CLI surface
+## CLI
 
 ```
-winshot list displays                 # index, name, physical+logical res, DPI, position, HDR
-winshot list windows [--filter STR]   # hwnd, pid, exe, title, monitor, state
+winshot list displays                 # index, name, physical+logical res, scale, position, HDR
+winshot list windows [--filter STR]   # hwnd, pid, exe, monitor, state, title
 
-winshot                               # whole virtual desktop -> ./winshot-<ts>.png
-winshot --display 1                   # one monitor by index
-winshot --display primary
-winshot --window "CapCut"             # by title substring
-winshot --pid 27768                   # by process id
-winshot --exe capcut.exe              # by executable name
-winshot --region 100,200,800,600      # x,y,w,h in physical pixels
-winshot --all                         # every display, one file each
+winshot                               # every monitor, one file per monitor (tiled if needed)
+winshot --display 1                   # one monitor: index, name (DISPLAY5) or "primary"
+winshot --window "CapCut"             # by title substring, or an hwnd from `list windows` (0x1411d6)
+winshot --pid 27768                   # top window of a process
+winshot --exe capcut                  # top window of an executable (.exe optional)
+winshot --region -400,2000,1200,500   # x,y,w,h in physical virtual-desktop pixels
+winshot --all                         # every display, one file each (<name>-DISPLAY1.png ...)
+winshot --from page.png               # process a saved PNG instead of capturing
 
-  -o, --out PATH            output path (default ./winshot-<ts>.png)
-      --format png|webp     default png
-      --scale auto|N|off    resampling; default off
-      --fit WxH             downscale to fit a box, aspect preserved
-      --flash               white flash on the captured display (default off)
-      --shutter             camera-shutter sound (default off)
+Default output, sized for Claude (see "The default output" below):
+      --long-edge N         long-edge cap, default 2000 (Claude Code's own cap)
+      --tier high|standard  Claude resolution tier to size for; high = Claude 4.7 and later
+      --max-detail          keep images that already fit at full size (more tokens)
+      --text-scale S        skip measuring; use this text-safe scale
+
+winshot --raw                         # lossless, full resolution, one file: for people
+      --scale off|auto|N    --raw only: resampling (auto = calibrated, else 1/DPI scale)
+      --fit WxH             --raw only: downscale to fit a box, aspect preserved
+
+  -o, --out PATH            output path; WSL or Windows paths both work
+      --format png|webp     default from -o's extension, else png; webp is lossless
+      --filter F            lanczos3 (default; exact 1/2, 1/4 use area averaging) | mitchell | box | bilinear
+      --flash               white flash over what was captured (default off)
+      --shutter             camera-shutter click (default off)
       --delay MS            wait before capturing
       --cursor              include the mouse cursor (default off)
-      --stdout              write the image to stdout instead of a file
+      --stdout              write the image to stdout (only when the result is one image)
+  -v, --verbose             resolution, DPI, colour path, sizes, timings on stderr
 
-winshot calibrate [--display N]       # find this display's safe downscale threshold
+winshot fx [--display N]              # preview the flash and shutter sound, capturing nothing
+      --no-flash | --no-sound | --wav FILE (save the sound) | --duration MS (hold the flash)
+
+winshot calibrate [--display N]       # OCR-measure this display's safe downscale, cache it for --scale auto
+winshot calibrate --from shot.png     # same, on a saved image (prints only)
 ```
 
+Minimized windows are restored without taking focus, captured, and re-minimized. When
+several windows match, the topmost one with real content is taken: apps like CapCut
+keep visible-but-blank helper windows above their main window.
+
 ---
+
+## Measured on the target machine
+
+Whole virtual desktop (5760x2711), wall time as launched from WSL, 3 runs each:
+
+| | resolution | wall time |
+|---|---|---|
+| v0, original | 3456x2169 (logical, wrong) | 515-546 ms |
+| v0, DPI-fixed (`legacy/`) | 5760x2711 | 641-671 ms |
+| **winshot** | **5760x2711** | **413-443 ms** |
+
+About 1.5x faster than a *correct* v0, not the 5-10x originally estimated: v0 was never
+the 1.5-2.5 s the design assumed. The win that matters is correctness. Inside winshot,
+WGC capture (~150-250 ms including a 36-53 ms D3D device) dominates, not the encoder.
 
 ## Design decisions, briefly
 
-Full reasoning, including the measurements behind each, is in
-[`docs/DESIGN.md`](docs/DESIGN.md).
-
 | decision | choice | one-line reason |
 |---|---|---|
-| language | Rust, `x86_64-pc-windows-msvc` | kills ~600 ms of PowerShell startup; the exe must be Windows-native regardless |
-| capture API | Windows.Graphics.Capture, GDI `PrintWindow` fallback | only WGC does per-window *and* per-monitor, and handles occluded/GPU-composited windows |
-| default format | **PNG** | lossless, and the only format that pastes reliably into GitHub, Slack, and Claude |
-| default size win | **lossless palette reduction** | UI screenshots often have <256 colors; indexing cuts 50-75% with zero pixel change |
-| default resampling | **off** | resampling text is never free; the lossless win comes first |
-| goldilocks metric | **OCR agreement**, not SSIM/PSNR | pixel-fidelity metrics do not measure whether a glyph is still readable |
-| flash + shutter | off by default, fired **after** capture | otherwise the flash lands in the screenshot |
-
-### On file format
-
-JPEG is disqualified outright: its 8x8 DCT produces ringing around glyph edges, which is
-the exact failure mode that matters for screenshots of text. PNG is the default because
-it is lossless and universally pasteable. `--format webp` (lossless mode) is offered for
-roughly 25-35% smaller files when the destination is known to support it.
+| language | Rust, `x86_64-pc-windows-msvc` | no runtime startup; any Windows-native language would do |
+| capture API | Windows.Graphics.Capture | only WGC does per-window *and* per-monitor, incl. occluded / GPU-composited windows |
+| DPI | manifest + startup assertion + per-frame size check | the v0 failure was silent, so every layer fails loudly |
+| default mode | **sized for Claude**; `--raw` for a lossless original | the tool is for LLMs; a plain capture loses text on the way to Claude |
+| file format | **PNG**, zlib "balanced" | lossless, universally pasteable; 2x smaller than "fast" for ~50 ms per 9 Mpx |
+| palette path | automatic, not the size story | <= 256 colours is **rare** in practice (0 of 8 real captures); costs ~1 ms to check |
+| WebP | lossless only, opt-in | measured *larger* than balanced PNG on 5 of 8 captures |
+| JPEG | not offered | 8x8 DCT rings around glyph edges |
+| `--raw` resampling | **off** unless `--scale`/`--fit` | resampling text is never free |
+| goldilocks metric | OCR word recall, relative to OCR's own noise floor | the specified absolute 99.5% is unreachable with Windows OCR (see DESIGN §5) |
+| flash + shutter | off by default, fired **after** capture | verified: the flash is on screen, never in the shot |
+| LLM sizing | smallest text sets the scale; long images become tiles | a plain fit-to-2000 took a tall page's text to 2.9 px |
 
 ### On the "goldilocks" downscale
 
-The binding constraint is **glyph height in pixels**, not image dimensions. A fixed ratio
-is wrong: 0.5x on a 200%-scaled 4K panel is comfortable, while 0.5x on a 1080p display
-with 12 px text destroys it.
+The binding constraint is **glyph height in pixels**, not image dimensions. With `--raw`, `--scale auto`
+uses, per display, the value cached by `winshot calibrate`, else `1 / DPI scale` (0.5 at
+200%, 0.8 at 125%). For a capture spanning mixed-DPI displays it takes the *least*
+aggressive display's scale, so no display's text drops below its safe size.
 
-Three signals, cheapest first:
+`calibrate` uses the OCR engine built into Windows (no extra dependency), and scores only
+the **smallest text size** on the screen, because an average lets a status bar vanish.
+On synthetic text the line height that survives the calibrated scale is 9.6-10.3 px across
+a 3x range of font sizes (`scripts/check-legibility.py sweep`). That is Windows OCR's limit;
+Claude reads smaller (below), so `calibrate` is conservative for Claude.
 
-1. **DPI-derived** (free) — at 200% scaling, `scale = 0.5` reproduces what a 100% display
-   shows. Empirically validated on this machine: a 0.5-scale capture of a dense terminal
-   was fully legible.
-2. **Measured glyph height** — estimate text line pitch from row-wise edge density, pick
-   the scale that keeps x-height above ~7 px.
-3. **OCR-calibrated** (`winshot calibrate`) — binary-search the scale, OCR at each step,
-   and take the smallest scale holding >=99.5% character agreement against the full-res
-   reference. Slow, so it runs once per display and caches the result.
+### The default output (sized for Claude)
+
+Claude Code shrinks every image to <= 2000 px on the long edge before Claude sees it
+(observed: 3840x2400 arrives as 2000x1250), and Claude rejects anything over 8000 px. A plain
+resize to fit shrinks text with the image, and on a tall page it destroys it. So by default
+winshot (the older spelling `--for-claude` is still accepted):
+
+1. OCRs the image and finds the **smallest text size with real content** (>= 24 letters);
+2. scales so that text lands at 8 px line height, **Claude's own measured threshold**
+   (random words it cannot guess, 2 fonts x lowercase/CAPS/digits: every case read at least
+   93% at 8 px; the worst needs 7; DESIGN §5d);
+3. keeps one image if fitting the long edge stays within 5% of that scale; otherwise keeps
+   the text scale and **splits the long axis into balanced tiles**, cut in the blank row
+   nearest each balance point (overlapping only where no blank row exists);
+4. splits a multi-monitor desktop at monitor edges first, and names tiles `-1of4`, `-2of4`...
+
+Measured: an 1800x11846 retina page becomes 3 tiles, 6,129 tokens, with its smallest text at
+8.2 px (plain fit: 2.9 px, and the raw file is rejected outright). A walkthrough with every stage's
+images is in the artifact linked from HANDOFF.md. Measuring costs 0.7 s on a screen and
+2.2 s on that page; `--max-detail` skips it when the image already fits.
+
+The rule errs large on caps-only or digit-only small text (OCR measures its box at cap
+height), which costs an extra tile, never legibility. `--text-scale` overrides it.
+
+**Token cost is exact.** Claude reads 28x28-px patches, one token each: `ceil(w/28) x
+ceil(h/28)`, and resizes anything over its tier's cap (high tier: 2576 px, 4784 tokens).
+`-v` prints the size Claude will see and the exact tokens for every image. File size and
+format do not affect tokens at all. The default mode saves tokens only in ways that keep text:
+it never exceeds the cap (which would trigger a silent server-side shrink), crops uniform
+margins, fills partial patches with free resolution, and shrinks images that already fit
+down to their verified text-safe scale. `scripts/count-tokens.py` confirms the counts
+against the API's `count_tokens` endpoint (exact on every image tested: patches + 3 per
+image), and `scripts/claude-legibility.py` measured the threshold above (DESIGN §5c-5d).
 
 ---
 
-## Install
+## Build and install
+
+Needs the Windows-side Rust toolchain (`x86_64-pc-windows-msvc`) and VS Build Tools;
+everything is driven from WSL:
 
 ```bash
-# from WSL, once the Rust build exists
-cargo build --release --target x86_64-pc-windows-msvc
-install -m755 target/x86_64-pc-windows-msvc/release/winshot.exe ~/.local/bin/
-install -m755 shim/winshot ~/.local/bin/winshot
+./install.sh          # build, copy winshot.exe to %LOCALAPPDATA%\winshot, shim to ~/.local/bin
+./build.sh            # build only (target dir on NTFS: C:\Users\<you>\AppData\Local\winshot-build)
+./build.sh test       # unit tests (palette, resampling, OCR metric, smallest text, tiling, shutter)
+python3 scripts/check-legibility.py  # synthetic text of known size: sweep, mixed sizes, tall page
+python3 scripts/check-fx.py          # flash visible on screen, absent from the shot; sound plays
+python3 scripts/count-tokens.py *.png   # exact token cost per image from the API (needs a key; free)
+python3 scripts/claude-legibility.py --dry-run   # Claude's own threshold; a real run ~$0.40 (estimate)
 ```
 
-The shim translates WSL paths to Windows paths and back, so `-o ./shot.png` works from
-any WSL directory.
+`install.sh` backs up an existing v0 `~/.local/bin/winshot` to `winshot.v0.bak`.
 
-### v0 (works today)
+The shim translates absolute WSL paths (`-o`, `--from`) to Windows paths and maps the
+printed result back. Relative paths need no help: a Windows process launched from WSL
+inherits the `\\wsl.localhost\...` working directory, and the file is written in a single
+sequential write (5-25 ms measured).
+
+### v0 (still works, now at physical resolution)
 
 ```bash
 install -m755 legacy/winshot.sh ~/.local/bin/winshot
 cp legacy/winshot.ps1 /mnt/c/Users/$USER/AppData/Local/Temp/
 ```
-
-Captures at logical resolution only — see the bug above.
 
 ---
 
