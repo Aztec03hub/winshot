@@ -82,9 +82,11 @@ desktop) is published at https://claude.ai/artifact/Qu2XRCf5ScDqospmara6PZ (priv
 ## Open (DESIGN §8)
 
 HDR is untested (no HDR panel here). Capturing the monitors concurrently is the next speed
-lever. One `--cursor` capture over WezTerm showed no cursor, unexplained. The default mode errs
-large on caps-only small text (OCR measures caps at 0.79-0.90x height: extra tiles), and
-Claude's threshold was measured on dark-on-light text only.
+lever. One `--cursor` capture over WezTerm showed no cursor, unexplained. The legibility
+thresholds cover Consolas and Segoe UI, light and dark; other fonts, colour text and non-Latin
+scripts are unmeasured (CJK is classed as Caps, probably too lenient). The next token lever,
+if wanted, is sharp insets (DESIGN §8); colour changes, OCR sidecars and layout-distorting
+savings are ruled out by Phil.
 
 The API key is `ANTHROPIC_API_KEY` in `~/.bashrc`, deliberately **not exported** (an exported
 key can switch Claude Code itself to API billing). Pass it per process:

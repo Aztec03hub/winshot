@@ -256,11 +256,10 @@ line height that survives the calibrated scale is **9.6-10.3 px across a 3x rang
 sizes** (48 px hits the search floor and is excluded). That is *Windows OCR's* threshold.
 Claude's own is lower (§5d), so `calibrate` and `--scale auto` are conservative for Claude.
 
-**Caps and digits read small.** A line box runs from the tallest letter to the lowest
-descender, so caps-only or digit-only text (a clock, SMALL-CAPS LABELS) measures at cap
-height, smaller than its real size: measured at 0.79-0.90x the rendered height for caps and
-0.96-1.00x for digits and mixed case. Any rule applied to OCR heights therefore errs large
-on caps: an extra tile, never lost legibility.
+**OCR boxes depend on the letters.** A line box runs from the highest to the lowest ink, so
+caps-only or digit-only text (a clock, SMALL-CAPS LABELS) is boxed at cap height: 0.79-0.90x
+its rendered height for caps, 0.96-1.00x for digits. `calibrate` uses raw OCR heights and so
+errs large on such text; the default mode converts every box to a real height first (§5d).
 
 ### How `--scale auto` decides
 
@@ -422,9 +421,13 @@ light and dark, box / (ascender top to descender bottom):
 | x-height only (`mono`) | 0.513-0.556 |
 | CAPS / digits | 0.718-0.722 |
 
-A lowercase line's real height is its box divided by the largest ratio for its letter class,
-so the estimate errs small and the scale large; brackets, commas and slashes, which can
-stretch a box both ways, count as full height. Without this, "added removed" (17 px box, 22 px
+Every line's real height is its box divided by the largest ratio for its own letters, before
+lines are grouped, so the estimate errs small and the scale large. Brackets, commas, slashes,
+`j`, accented letters and unknown marks can stretch a box, so they make a lowercase line
+full height and a caps or digit line 1.45 (a full-height box over capitals). Quote marks and
+`t`, `i` reach above x-height and count as tall. A review of the first version found four
+ways it could err the other way (a group ratio taken from the wrong lines, quotes treated as
+x-height, `j` treated as tall-only, caps with brackets); all four are fixed and unit-tested. Without this, "added removed" (17 px box, 22 px
 real) read 22% too small and forced the laptop to x0.529 instead of x0.421. The smallest
 group also needs real content at its own size (12+ characters within 10%), so a lone 3-letter
 tab title just under a group of labels cannot pin the whole group to its size.

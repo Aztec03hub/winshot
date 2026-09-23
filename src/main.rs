@@ -394,7 +394,11 @@ fn shoot(o: Shot) -> Result<()> {
         let chosen = t.display.is_some() || t.region.is_some() || t.window.is_some() || t.pid.is_some() || t.exe.is_some();
         // For Claude, the whole desktop splits at monitor edges first: each monitor is
         // already a screen-shaped image, so no cut lands inside anything.
-        if t.all || (!o.raw && !chosen) {
+        if !o.raw && !chosen && o.stdout {
+            // One image to stdout: the primary display, not every monitor.
+            let d = find_display(&ds, "primary")?;
+            jobs.push(Job { frame: capture_display(&mut cap, d)?, displays: vec![d.index], rect: d.rect, label: d.name.clone(), suffix: None });
+        } else if t.all || (!o.raw && !chosen) {
             if o.stdout && t.all {
                 bail!("--all writes one file per display; it cannot go to --stdout");
             }
@@ -448,7 +452,7 @@ fn shoot(o: Shot) -> Result<()> {
 
     if o.dump_text {
         for job in &jobs {
-            println!("# {} ({}x{}): px shape x,y wxh words", job.label, job.frame.w, job.frame.h);
+            println!("# {} ({}x{}): box_px real_px shape x,y wxh words", job.label, job.frame.w, job.frame.h);
             calibrate::dump(&job.frame)?;
         }
         return Ok(());
@@ -582,7 +586,7 @@ fn for_claude(o: &Shot, ds: &[Display], calib: &std::collections::BTreeMap<Strin
             Some(v) => {
                 let shape = v.shape.unwrap_or(calibrate::Shape::Text);
                 let how = format!(
-                    "smallest text {:.0} px tall ({:?}, {} of {} lines, e.g. \"{}\"), kept at >= {} px: Claude's measured threshold for {:?}",
+                    "smallest text {:.0} px tall (real height, estimated from its OCR box; {:?}, {} of {} lines, e.g. \"{}\"), kept at >= {} px: Claude's measured threshold for {:?}",
                     v.small.h,
                     shape,
                     v.small.lines,

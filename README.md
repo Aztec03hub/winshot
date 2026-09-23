@@ -180,8 +180,10 @@ and the raw file is rejected outright). A walkthrough with every stage's
 images is in the artifact linked from HANDOFF.md. Measuring costs 0.7 s on a screen and
 2.2 s on that page; `--max-detail` skips it when the image already fits.
 
-Every estimate errs toward more resolution, never less; `--text-scale` overrides the
-measurement.
+Every estimate is built to err toward more resolution: box ratios are the largest measured,
+and anything that could stretch a box (brackets, commas, `j`, accented letters, unknown
+marks) counts as full height. A code review found and fixed four ways the first version
+could err the other way. `--text-scale` overrides the measurement.
 
 **Token cost is exact.** Claude reads 28x28-px patches, one token each: `ceil(w/28) x
 ceil(h/28)`, and resizes anything over its tier's cap (high tier: 2576 px, 4784 tokens).

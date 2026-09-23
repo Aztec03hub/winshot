@@ -1,6 +1,6 @@
 //! Default (LLM) mode geometry: fit Claude's vision limits without shrinking text past
 //! legibility. The text decides the scale; the number of images absorbs the length.
-//! (The scale itself comes from `legible::text_scale`, measured on the image.)
+//! (The scale itself comes from `calibrate::text_scale`, measured on the image.)
 
 use crate::capture::Frame;
 use crate::encode::{resize, Filter};

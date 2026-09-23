@@ -71,35 +71,54 @@ impl Shape {
         }
     }
 
-    /// OCR line-box height / the height this shape's threshold is measured in, for a
-    /// line of `words`: the LARGEST value measured, so the real height estimated from an
-    /// OCR box errs small and the scale errs large.
-    fn ocr_ratio(self, words: &[String]) -> f64 {
+    /// OCR box height / the height this shape's threshold is measured in, for a line of
+    /// `words`: the LARGEST value that could apply, so the real height estimated from the
+    /// box errs small and the scale errs large.
+    ///
+    /// - Text: see `text_box_ratio`.
+    /// - Caps: OCR boxes plain capitals at 0.79-0.90 of their rendered height (measured on
+    ///   Consolas and Segoe UI renders, DESIGN §5d); 0.90 is used. A caps line with a
+    ///   bracket, comma, slash or accented letter can be boxed well past cap height, so
+    ///   it gets 1.45 (a full-height box over 0.72-high capitals, with margin).
+    /// - Digits: boxed at 0.96-1.00 of their height; 1.0 is used, 1.45 with such marks.
+    pub fn ocr_ratio(self, words: &[String]) -> f64 {
+        let stretched = words.iter().flat_map(|w| w.chars()).any(stretches_box);
         match self {
             Shape::Text => text_box_ratio(words),
+            Shape::Caps if stretched => 1.45,
             Shape::Caps => 0.90,
+            Shape::Digits if stretched => 1.45,
             Shape::Digits => 1.0,
         }
     }
 }
 
+/// Characters whose ink may reach both above and below the letters around them:
+/// brackets, commas, slashes, j, and any non-ASCII letter (accents above, cedillas and
+/// ogoneks below). Unknown marks count too, so every guess errs toward more resolution.
+fn stretches_box(c: char) -> bool {
+    const PLAIN: &str = "acemnorsuvwxz.:-=+~bdfhiklt!?&%#'\"*^`<>gpqy ";
+    !(c.is_ascii_uppercase() || c.is_ascii_digit() || PLAIN.contains(c))
+}
+
 /// OCR boxes a word from its highest to its lowest ink, so a lowercase line with no
-/// descenders (g j p q y) is boxed short of its full height, and one with no ascenders
+/// descenders (g p q y) is boxed short of its full height, and one with no ascenders
 /// either shorter still. Measured with Windows OCR on Consolas and Segoe UI, light and
 /// dark, as box / (ascender top to descender bottom): ascenders-only 0.769-0.778,
-/// descenders-only 0.744-0.778, x-height-only 0.513-0.556. The largest is used. Anything
-/// that might stretch a box both ways (brackets, commas, slashes...) counts as full height.
+/// descenders-only 0.744-0.778, x-height-only 0.513-0.556. The largest is used. Only
+/// letters and marks that stay inside the x-height band count as x-height; anything that
+/// might stretch a box (see `stretches_box`) makes the line full height.
 fn text_box_ratio(words: &[String]) -> f64 {
-    const X: &str = "acemnorsuvwxz.:-=+~*'\"`^";
+    const X: &str = "acemnorsuvwxz.:-=+~ ";
     const DESC: &str = "gpqy";
     let (mut up, mut down) = (false, false);
     for c in words.iter().flat_map(|w| w.chars()) {
-        if DESC.contains(c) {
+        if stretches_box(c) {
+            return 1.0;
+        } else if DESC.contains(c) {
             down = true;
-        } else if !X.contains(c) && (c.is_alphanumeric() || "!?&%#<>".contains(c)) {
-            up = true; // ascenders, i and t, capitals, digits: all reach above x-height
         } else if !X.contains(c) {
-            return 1.0; // brackets, commas, slashes, j... may reach both ways
+            up = true; // ascenders, i and t, capitals, digits, quotes: above x-height
         }
     }
     match (up, down) {
@@ -187,21 +206,38 @@ pub fn calibrate(f: &Frame) -> Result<Verdict> {
     Ok(Verdict { scale: hi, small, shape: None, floor, steps })
 }
 
+/// Every OCR line of `f`, for `--dump-text` (analysis): height, shape, position, words.
+pub fn dump(f: &Frame) -> Result<()> {
+    let lines = ocr_lines(&engine()?, f)?;
+    for l in &lines {
+        let (x, y, w, h) = l.rect;
+        let shape = Shape::of(&l.words);
+        let real = l.h as f64 / shape.ocr_ratio(&l.words);
+        println!("{:>5.1} {:>5.1} {:<6} {:>5.0},{:<5.0} {:>5.0}x{:<4.0} {}", l.h, real, format!("{:?}", shape), x, y, w, h, l.words.join(" "));
+    }
+    let groups = shape_groups(&lines);
+    let bind = groups.iter().map(|g| g.0).fold(0.0, f64::max);
+    for (need, small, shape) in &groups {
+        println!(
+            "## group {:?}: smallest real {:.1} px ({} lines, e.g. \"{}\"), threshold {} px, needs x{:.3}{}",
+            shape,
+            small.h,
+            small.lines,
+            small.words.iter().take(6).cloned().collect::<Vec<_>>().join(" "),
+            shape.safe_px(),
+            need,
+            if *need == bind { "  <- sets the scale" } else { "" }
+        );
+    }
+    Ok(())
+}
+
 /// The default mode's text-safe scale for THIS image. Lines are grouped by letter shape;
 /// in each group the smallest text size with real content needs the scale that puts
 /// its (estimated rendered) height at that shape's threshold, and the most demanding
 /// group wins. OCR measures the text at full resolution; it does not judge the result,
 /// because it is stricter than Claude. None when there is too little text to measure:
 /// the caller falls back to calibrated or 1/DPI.
-/// Every OCR line of `f`, for `--dump-text` (analysis): height, shape, position, words.
-pub fn dump(f: &Frame) -> Result<()> {
-    for l in ocr_lines(&engine()?, f)? {
-        let (x, y, w, h) = l.rect;
-        println!("{:>5.1} {:<6} {:>5.0},{:<5.0} {:>5.0}x{:<4.0} {}", l.h, format!("{:?}", Shape::of(&l.words)), x, y, w, h, l.words.join(" "));
-    }
-    Ok(())
-}
-
 pub fn text_scale(f: &Frame) -> Result<Option<Verdict>> {
     let engine = engine()?;
     let lines = ocr_lines(&engine, f)?;
@@ -209,20 +245,32 @@ pub fn text_scale(f: &Frame) -> Result<Option<Verdict>> {
 }
 
 /// The scale each letter-shape group needs, and the most demanding group.
+/// `SmallText::h` is the estimated REAL line height (in the shape's threshold units):
+/// every line's OCR box is converted first, from its own letters, and only then grouped,
+/// so a short x-height-only label cannot make taller text around it look bigger.
 pub fn shape_scale(lines: &[Line]) -> Option<(f64, SmallText, Shape)> {
-    let mut best: Option<(f64, SmallText, Shape)> = None;
+    shape_groups(lines).into_iter().fold(None, |best, (need, small, shape)| match best {
+        Some((b, _, _)) if b >= need => best,
+        _ => Some((need, small, shape)),
+    })
+}
+
+/// Every letter-shape group that has real text: the scale it needs, its smallest text
+/// (real height), and the shape. `shape_scale` takes the most demanding.
+pub fn shape_groups(lines: &[Line]) -> Vec<(f64, SmallText, Shape)> {
+    let mut out = Vec::new();
     for shape in [Shape::Text, Shape::Caps, Shape::Digits] {
-        let group: Vec<Line> = lines.iter().filter(|l| Shape::of(&l.words) == shape).cloned().collect();
+        let group: Vec<Line> = lines
+            .iter()
+            .filter(|l| Shape::of(&l.words) == shape)
+            .map(|l| Line { h: (l.h as f64 / shape.ocr_ratio(&l.words)) as f32, ..l.clone() })
+            .collect();
         let Some(mut small) = smallest_text(&group) else { continue };
         small.all_lines = lines.len();
-        // The class's height is set by its smallest lines; estimate their real height.
-        let ratio = group.iter().filter(|l| l.h <= small.h * 1.1).map(|l| shape.ocr_ratio(&l.words)).fold(0.0, f64::max);
-        let need = (shape.safe_px() * ratio / small.h as f64).clamp(MIN_SCALE, 1.0);
-        if best.as_ref().is_none_or(|(b, _, _)| need > *b) {
-            best = Some((need, small, shape));
-        }
+        let need = (shape.safe_px() / small.h as f64).clamp(MIN_SCALE, 1.0);
+        out.push((need, small, shape));
     }
-    best
+    out
 }
 
 /// The smallest line height h whose lines within [h, 1.2h] hold enough characters
@@ -381,16 +429,16 @@ mod tests {
         let mut lines = vec![line(13.0, "INSERTIONS DELETIONS MODIFIED MOVED ADDED")];
         lines.extend((0..10).map(|_| line(22.0, "const rule = line.split(the) other, words")));
         let (s, small, shape) = shape_scale(&lines).unwrap();
-        // caps: 7 px x 0.90 / 13 = 0.485; text (full-height line): 9 / 22 = 0.409.
+        // caps: 13 px box / 0.90 = 14.4 px real, 7 / 14.4 = 0.485; text: 9 / 22 = 0.409.
         assert_eq!(shape, Shape::Caps);
-        assert_eq!(small.h, 13.0);
-        assert!((s - 7.0 * 0.9 / 13.0).abs() < 1e-9, "{s}");
+        assert!((small.h - 13.0 / 0.9).abs() < 1e-3, "{}", small.h);
+        assert!((s - 7.0 * 0.9 / 13.0).abs() < 1e-6, "{s}");
         // The same 13 px as lowercase needs 9/13 = 0.692.
         // Lowercase with ascenders but no descenders: boxed at 0.778 of its real height.
         let lower: Vec<Line> = (0..3).map(|_| line(13.0, "insertions deletions modified moved added")).collect();
         let (s2, _, shape2) = shape_scale(&lower).unwrap();
         assert_eq!(shape2, Shape::Text);
-        assert!((s2 - 9.0 * 0.778 / 13.0).abs() < 1e-9, "{s2}");
+        assert!((s2 - 9.0 * 0.778 / 13.0).abs() < 1e-6, "{s2}");
     }
 
     #[test]
@@ -401,6 +449,24 @@ mod tests {
         assert_eq!(text_box_ratio(&w("mono excess")), 0.556);
         assert_eq!(text_box_ratio(&w("move on, now")), 1.0, "a comma may reach below the baseline");
         assert_eq!(text_box_ratio(&w("return")), 0.778, "t reaches above x-height");
+        assert_eq!(text_box_ratio(&w("name = \"raw\"")), 0.778, "quotes reach above x-height");
+        assert_eq!(text_box_ratio(&w("join main")), 1.0, "j drops below the baseline");
+        assert_eq!(text_box_ratio(&w("façade")), 1.0, "a cedilla drops below");
+        assert_eq!(Shape::Caps.ocr_ratio(&w("FILES (3), QUEUED")), 1.45);
+        assert_eq!(Shape::Caps.ocr_ratio(&w("FILES QUEUED")), 0.90);
+        assert_eq!(Shape::Digits.ocr_ratio(&w("1,234")), 1.45);
+    }
+
+    #[test]
+    fn short_x_height_labels_do_not_hide_taller_text() {
+        // Review scenario: 12 px boxes of x-height-only words (real ~21.6 px) next to
+        // 14 px full-height lines. The 14 px lines are the real smallest text.
+        let mut lines: Vec<Line> = (0..3).map(|_| line(12.0, "someone ran over some rows")).collect();
+        lines.extend((0..10).map(|_| line(14.0, "height gauge filtering")));
+        let (s, small, shape) = shape_scale(&lines).unwrap();
+        assert_eq!(shape, Shape::Text);
+        assert!((small.h - 14.0).abs() < 1e-3, "{}", small.h);
+        assert!((s - 9.0 / 14.0).abs() < 1e-6, "{s}");
     }
 
     #[test]
@@ -408,10 +474,11 @@ mod tests {
         // A 3-letter tab title at 13 px just below a real group of 15 px labels.
         let lines = vec![line(13.0, "DEV"), line(15.0, "INSERTIONS DELETIONS MODIFIED MOVED")];
         let (_, small, shape) = shape_scale(&lines).unwrap();
-        assert_eq!((shape, small.h), (Shape::Caps, 15.0));
+        assert_eq!(shape, Shape::Caps);
+        assert!((small.h - 15.0 / 0.9).abs() < 1e-3);
         // With real content at 13 px, 13 px sets it.
         let lines = vec![line(13.0, "STATUS READY BRANCH MAIN"), line(15.0, "INSERTIONS DELETIONS MODIFIED MOVED")];
-        assert_eq!(shape_scale(&lines).unwrap().1.h, 13.0);
+        assert!((shape_scale(&lines).unwrap().1.h - 13.0 / 0.9).abs() < 1e-3);
     }
 
     #[test]
