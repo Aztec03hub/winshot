@@ -660,8 +660,7 @@ afterwards: three ctrl+` presses a few seconds apart in the same session gave th
 for the window and seeing 3, 98 and 15 key events over the stretches that followed. The three
 presses were seconds apart, so it did not exercise a press during a press, a held key, or a
 second press inside the second after the first. A review then changed the hook's lifetime
-(started once per window, held state kept across a reinstall, a longer repeat window); **that
-last version passes its unit tests and the end-to-end check but has not been tried live.**
+(started once per window, held state kept across a reinstall, a longer repeat window), and later rounds changed the worker and the shutdown. The final pushed version (commit `518cea0`) was tried live by Phil in the same `mstsc` session afterwards, with several presses and a long hold, and worked as expected (his report; no log lines were kept).
 
 *Limits.* Not tested: why two install times (the log shows the first hook removed unused and the
 press arriving after the second install, which is consistent with the first being too early, but
