@@ -66,6 +66,7 @@ So this rig **is** mixed-DPI, the hard case, and it is handled. The regression o
 | downscale-not-smaller warning | done: a `--scale`/`--fit` result no smaller than full resolution warns |
 | exact token counts | done: `ceil(w/28) x ceil(h/28)` and the API's resize rule, unit-tested against the docs; `-v` prints them |
 | token savings | done: token-cap-aware tiles, margin trim, patch alignment, lean default (`--max-detail` opts out) |
+| `winshot hotkey` (global key: focused display -> file + clipboard) | done 2026-10-09 (DESIGN 6b): detached daemon, autostart, prune, `scripts/check-hotkey.py`, six review rounds fixed (the sixth covered the burst design: frame grabbed at the press, slow work on a worker a bounded backlog that drops presses rather than blocking, `--stop` that waits for saving; **the seventh round's fixes are not re-reviewed**; the clipboard-touching end-to-end check passed in two full runs and flaked under machine load, never on the daemon); works in a live `mstsc` window via a short-lived keyboard hook on its own thread (the client's own hook otherwise swallows the key; verified live with a real keyboard on the first version and, in three presses, on the next; **the final version after the fifth review is not re-tried live**), other remote clients untested |
 | API confirmation | **done 2026-09-23**: `count_tokens` matched winshot on every image (patches + 3); Claude legibility measured (estimated $0.40; usage not logged) |
 
 A stage-by-stage walkthrough of the default mode with real images (tall page, laptop screen,
@@ -81,7 +82,12 @@ desktop) is published at https://claude.ai/artifact/Qu2XRCf5ScDqospmara6PZ (priv
 
 ## Open (DESIGN §8)
 
-HDR is untested (no HDR panel here). Capturing the monitors concurrently is the next speed
+HDR is untested (no HDR panel here). The hotkey worked inside a live `mstsc` window (DESIGN 6b: a
+keyboard hook exists only while a remote-desktop client has focus; re-try it live after any change
+to the `rdp` module); the Windows App / Windows 365,
+Citrix and VMware clients are matched by executable name and untested, as is full-screen mode.
+Claude Code's own image-paste key on the
+bitmap clipboard format is untested (the pasted path is the tested route). Capturing the monitors concurrently is the next speed
 lever. One `--cursor` capture over WezTerm showed no cursor, unexplained. The legibility
 thresholds cover Consolas and Segoe UI, light and dark; other fonts, colour text and non-Latin
 scripts are unmeasured (CJK is classed as Caps, probably too lenient). The next token lever,
@@ -96,9 +102,10 @@ older `ZNTHROPIC_API_KEY` line is a revoked key (401).
 ## Verify
 
 ```bash
-./build.sh test                        # 18 unit tests
+./build.sh test                        # 32 unit tests
 python3 scripts/check-legibility.py    # OCR sweep, mixed sizes, tall page
 python3 scripts/check-fx.py            # flash on screen and not in the shot; sound plays (you will see and hear it)
+python3 scripts/check-hotkey.py        # hotkey press -> files + clipboard (pixels compared); stop your own hotkey first (`winshot hotkey --stop`); --inject sends real keys
 winshot -v                             # must print physical == display mode for every display
 ```
 

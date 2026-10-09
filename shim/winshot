@@ -7,13 +7,19 @@ set -uo pipefail
 EXE="${WINSHOT_EXE:-@WINSHOT_EXE@}"
 [[ -x "$EXE" ]] || { echo "winshot: $EXE not found; run install.sh or set WINSHOT_EXE" >&2; exit 127; }
 
-args=() raw=0 take=0
+args=() raw=0 take=0 isdir=0
+# A folder the hotkey will remember (it is stored in the Run key and resolved again at logon, when
+# WSL is not up) must not end up as a \\wsl.localhost path: make a relative one absolute first.
+abs_dir() { case "$1" in /* | [A-Za-z]:* | \\\\*) printf '%s' "$1" ;; *) realpath -m -- "$1" ;; esac; }
 for a in "$@"; do
   if (( take )); then
+    (( isdir )) && a=$(abs_dir "$a")
     [[ "$a" == /* ]] && a=$(wslpath -w "$a")
-    take=0
+    take=0 isdir=0
   else
     case "$a" in
+      --dir) take=1 isdir=1 ;;
+      --dir=*) a="--dir=$(abs_dir "${a#*=}")"; [[ "${a#*=}" == /* ]] && a="--dir=$(wslpath -w "${a#*=}")" ;;
       -o | --out | --from | --wav) take=1 ;;
       --out=/* | --from=/* | --wav=/*) a="${a%%=*}=$(wslpath -w "${a#*=}")" ;;
       -o=/*) a="-o=$(wslpath -w "${a#-o=}")" ;;

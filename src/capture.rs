@@ -238,7 +238,7 @@ pub fn windows() -> Result<Vec<Window>> {
     Ok(out)
 }
 
-fn exe_name(pid: u32) -> String {
+pub fn exe_name(pid: u32) -> String {
     unsafe {
         let Ok(h) = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) else { return String::new() };
         let mut buf = [0u16; 1024];

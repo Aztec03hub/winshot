@@ -79,6 +79,15 @@ Use `--raw`: one lossless PNG exactly as on screen, saved where they asked
 it, which can make small text unreadable. Take a default capture for yourself instead (or a
 small `--raw --region` zoom, above).
 
+## When the user took the screenshot themselves
+
+The user may have a global hotkey running (`winshot hotkey`) that saves a screenshot of the
+focused display and puts it on their clipboard, and they paste it into the chat. Those files
+are already Claude-sized and live, by default, in `/mnt/c/Users/<user>/Pictures/winshot/`, named
+`<date>_<time>_<ms>-<window title>.png`. If they say "the screenshot I just took" and nothing
+is attached, read the newest: `ls -t /mnt/c/Users/<user>/Pictures/winshot | head -3`. Do not
+start or stop the hotkey yourself (`winshot hotkey --status` only tells you whether it runs).
+
 ## Messages and what to do
 
 | message | meaning | action |

@@ -2,6 +2,7 @@ mod calibrate;
 mod capture;
 mod encode;
 mod fx;
+mod hotkey;
 mod tile;
 
 use anyhow::{bail, Context, Result};
@@ -47,6 +48,8 @@ enum Cmd {
         #[arg(long, default_value_t = 120, value_parser = clap::value_parser!(u32).range(10..=10000))]
         duration: u32,
     },
+    /// Global hotkey: screenshot the focused display, save it, and put it on the clipboard
+    Hotkey(hotkey::HotkeyArgs),
     /// Find a display's smallest text-safe downscale by OCR agreement, and cache it for --scale auto
     Calibrate {
         /// display index, name (DISPLAY1) or "primary"; default primary
@@ -223,6 +226,7 @@ fn run() -> Result<()> {
     match cli.cmd {
         Some(Cmd::List { what: ListWhat::Displays }) => list_displays(),
         Some(Cmd::List { what: ListWhat::Windows { filter } }) => list_windows(filter),
+        Some(Cmd::Hotkey(a)) => hotkey::run(a),
         Some(Cmd::Calibrate { display, from }) => run_calibrate(display, from),
         Some(Cmd::Fx { display, no_flash, no_sound, wav, duration }) => run_fx(display, no_flash, no_sound, wav, duration),
         None => shoot(cli.shot),

@@ -481,6 +481,206 @@ and played with `PlaySoundW(SND_MEMORY)`. The code is the generator, so there is
 `assets/shutter.wav` to keep in sync. A unit test pins the envelope and checks that the
 spectral centroid falls within 2-6 kHz.
 
+### 6b. The hotkey
+
+`winshot hotkey` (`src/hotkey.rs`) is a global shortcut: one key combination, from any
+program, screenshots the focused display, saves it under a fresh name and puts it on the
+clipboard. Everything below was built and run on this machine on 2026-10-09.
+
+**Mechanism.** One hidden message-only window and a message loop, with the combination
+registered by `RegisterHotKey`. That is system-wide and needs no administrator rights, and in
+normal use installs no keyboard hook (a low-level hook is what antivirus products flag, and it
+sees every keystroke). The one exception is the short-lived hook while a remote-desktop client
+has focus, described below. The same window is the single-instance lock and the target of `--stop`
+(`WM_CLOSE`), so there is no pid file to go stale. A bare key with no modifier is refused,
+since it would be taken from every program. A one-off probe (not kept in the repo) registered
+seven candidate combinations (ctrl+`, ctrl+., each with alt and with shift, ctrl+alt+shift+s):
+all were free, so no running program owned any of them globally. That probe cannot see
+shortcuts inside one app, which still lose to a global hotkey: ctrl+` is also Sublime Text's
+console and VS Code's terminal.
+
+**Which display.** The monitor holding the foreground window (`GetForegroundWindow`,
+`MonitorFromWindow`); when nothing is focused or the window is minimized, the monitor under
+the mouse. Checked by hand with injected key presses, Sublime focused on DISPLAY5 and Chrome
+focused on DISPLAY1: each press saved that display (not covered by `check-hotkey.py`).
+
+**Bursts.** A press is split in two so that quick presses each get their own frame. The daemon
+thread does only the fast half the instant the key goes down (find the focused display, grab its
+frame, flash, shutter); a worker thread does the slow half in order (measuring the text, tiling,
+encoding, files, clipboard, pruning). Before the split everything ran on the daemon thread, about
+0.35-0.4 s a press by the log, so a burst queued up and each frame was grabbed when its turn came,
+not when the key was pressed; one burst in the log gave 11 files 0.39 s apart. The file name
+carries the time of the grab, not of the save.
+
+Three rules came out of review. **The daemon thread never blocks on the worker.** It must keep
+pumping messages (`--stop`, the remote-desktop focus watcher), so when 7 screenshots are already
+unsaved (6 waiting plus the one being saved, `QUEUE_CAP`) a further press is dropped: no frame is
+taken, a line goes to the log and the error beep sounds. A frame is a whole screen (about 27 MB at
+4K, so 7 of them are about 190 MB, plus the worker's working copies of the one it is saving), which is why
+the backlog is bounded;
+frames that were dropped are lost, not late. **The daemon window owns the clipboard, and its thread
+always pumps.** Clearing the clipboard sends a synchronous message to the previous owner, so the
+owner's thread must keep handling messages. A version that gave the worker a window of its own
+(never pumping) was tried and dropped on review: another program clearing the clipboard later could
+in theory have waited on it. A measurement here (a throwaway script, not kept in the repo: a separate
+process taking the clipboard after a press, 434 ms, mostly its own start-up, once) showed no hang, but one measurement of Windows internals is
+not a reason to keep a design that needs it. **Stopping lets frames already taken finish saving**:
+`WM_CLOSE` stops the loop but leaves the window alone, the queue is closed, the daemon thread keeps
+pumping while it waits for the worker, and only then is the window destroyed. `running()` finds the
+daemon by that window, so `--stop` really does wait for the saving (up to its 5 s limit, which a very
+long backlog could exceed; it then says so rather than claiming success). The daemon itself gives up
+after 20 s and logs how many screenshots it abandoned, because clearing the clipboard waits on the
+window of the program that owned it, and a hung one would otherwise keep the process alive for good.
+The remote-desktop keyboard hook is removed before that wait, so it cannot swallow the key while the
+backlog drains.
+
+Measured with `check-hotkey.py` on this machine, with posted presses and no keys: 7 presses 40 ms
+apart gave 7 files whose grab times lay 75-109 ms apart (523 ms in all; an earlier run of 8 gave
+52-93 ms), and the clipboard held the last; 14 presses gave 9 files, the rest dropped, the hotkey
+answering afterwards. Those are single runs. What limits the gap between grabs was not measured
+(the guess is the capture API's wait for a first frame); a held key is still one press (its
+repeats are swallowed on purpose). The assertion that guards this (gaps under 250 ms, span under
+150 ms a press) would fail on the old inline code, which gave gaps of 350 ms and more.
+
+**Pipeline.** The same sizing path as a plain `winshot` run: `capture_display` (with its exact
+physical-size check) then `for_claude` (measure the smallest text, scale, tile). The flash
+and shutter start after the frame is in memory, as always. Differences from a plain run: the
+cursor is never included, and the daemon's stderr is the null device, so what `shoot` would
+print goes to the log instead (the all-black-frame warning is logged; the "too little text to
+measure, using the fallback scale" warning is not, and is not visible anywhere).
+
+**When a press fails.** It logs, beeps and the daemon carries on. A panic is caught per press
+(and logged by a panic hook, since stderr is lost); a failed grab is retried once with a new D3D
+device (it can die across sleep or a display change); the folder is recreated if it vanished;
+the clipboard is filled with every payload built before it is cleared, and a failed put empties
+it again rather than leaving it half-set (a panic mid-fill is caught and the clipboard closed,
+but could leave it partly filled). A failure at start-up (a taken key) is
+reported by the launching command from the log's last line.
+
+**Names.** `<yyyy-mm-dd>_<hh>_<mm>_<ss>_<ms>-<window title>.png`, built by appending, never
+with `Path::with_extension`, which would cut a title like "report.docx - Word" at its last
+dot (found by reading the code, now unit-tested). The title is stripped of characters
+Windows forbids and cut to 60. A name already in the folder, as one image or as tiles, gets
+`~2`, `~3`. Three presses 0.4 s apart gave three distinct files.
+
+**The clipboard.** One clipboard holds several formats and each program asks for the one it
+understands, so winshot sets all of them in one transaction: a DIB (24-bit, bottom-up) and
+the registered `PNG` format for programs that paste images, the file's Windows path as
+Unicode text for terminals and editors, and a `CF_HDROP` file list for Explorer, Teams and
+Outlook. Windows adds the derived bitmap formats itself. Read back after a real press: the
+text and the file list equal the saved file's path, and the bitmap has the saved file's
+size. The text is a **Windows** path because that is what a Greenshot capture pastes as
+(into Sublime it was `C:\...\Screenshots\<date>-<title>.png`) and Claude Code in WSL
+accepted that: it showed the attachment as `[Image #n]` with source `/mnt/c/...`,
+converting the path itself. A multi-tile result carries paths only, since a clipboard holds one image.
+
+**Detaching.** `winshot hotkey` re-launches itself with `DETACHED_PROCESS` (no console of its
+own) and returns once the new process has its window and is still alive 150 ms later, or reports
+its exit with the last log line that run wrote.
+First version hung the WSL shim for as long as the daemon lived: `CreateProcess` gives a
+child **every** inheritable handle, not only the three standard ones, so the shim's output
+pipe never reached end-of-file. Giving the child null stdio was not enough; the parent now
+marks its own standard handles non-inheritable before spawning. After the fix the shim
+returns in 0.28 s (3 launches; it includes the 150 ms re-check that the child is still alive).
+
+**Autostart** is a value under `HKCU\...\Run` (written with `reg.exe`) holding the command
+line (each argument quoted for `CommandLineToArgvW`, a trailing backslash doubled), so the key,
+folder and prune options persist; the key and folder are validated before anything is written,
+and `--dir` is stored absolute (the shim translates WSL paths for it). `--stop` waits until the
+window is gone, because a restart or an install right after must not race the exiting process.
+`install.sh` stops a running hotkey before copying the exe (it is locked while it runs) and says
+to start it again. **Pruning** (`--prune-days`, at least 1) only deletes files whose names carry
+winshot's full stamp (`2026-10-09_10_48_16_417`, then `-title`, `~n` or nothing, then `.png`),
+after each press and at start; a `2024-trip.png` in the same folder is never touched, and
+nothing is deleted unless asked.
+
+**Tests.** 32 unit tests in all (9 in the hotkey module) cover everything pure there (key parsing, title sanitising, name building
+and same-millisecond collisions, the stamp test and decoys for pruning, argument quoting, the DIB
+and file-list layouts). `scripts/check-hotkey.py` runs the rest on the real desktop: start,
+a second start, one press (file name; clipboard text and file list equal the file's path; the
+clipboard bitmap equals the file on a 16x16 grid of pixels and its PNG payload equals the file's
+bytes; or, for tiles, every path in order and no image), three quick presses with no name reused,
+`--stop` and restart. By default a "press" is `WM_HOTKEY` posted to the daemon's window, so
+nothing is typed into whatever has focus; `--inject` sends the real chord. That the
+`RegisterHotKey` binding itself fires was shown once with injected keys (Ctrl+` and ctrl+F24).
+
+**Remote desktop (measured 2026-10-09).** Capturing a live remote-desktop session always worked:
+the session is pixels on a local display. The key did not. With `mstsc` showing a live session
+(`phil-desktop - Remote Desktop Connection`) in the foreground, neither an injected ctrl+F24
+nor, later, Phil's real ctrl+` and win+shift+` reached the daemon (no press, no error); with any
+other local window focused they did.
+
+*Cause.* Web research (AutoHotkey forum threads on the same symptom; Microsoft's
+`KeyboardHookMode` documentation) says the remote-desktop client installs its own low-level
+keyboard hook while its window is active. A low-level hook runs before `RegisterHotKey` is
+applied, and the most recently installed hook runs first, so the client sees the key first and
+forwards it to the remote machine. The "Apply Windows key combinations" setting only decides
+where Windows-key shortcuts go and did not rescue win+shift+` here. That the client's hook is
+what swallowed the key is the documented explanation, consistent with every observation, but
+the client's own hook was not inspected.
+
+*Fix (`rdp` module in `src/hotkey.rs`).* A `SetWinEventHook(EVENT_SYSTEM_FOREGROUND)` watcher
+sees which program has focus. When it is a remote-desktop client (`mstsc.exe`, `msrdc.exe`,
+`msrdcw.exe`, `windows365.exe`, `wfica32.exe`, `cdviewer.exe`, `vmware-view.exe`), a thread of
+its own installs a `WH_KEYBOARD_LL` hook, 400 ms after focus and again at 1.5 s: installed after
+the client's, it runs first. The hook matches the key and the exact set of held modifiers, posts
+the same `WM_HOTKEY` message to the daemon window, and swallows the key, its auto-repeat and its
+key-up so the remote machine does not receive it. Leaving the client stops the thread and removes
+the hook, so the hook exists only while a remote session has the keyboard. `--no-rdp-hook` turns
+it off. It logs how many key events it saw (never which keys), to tell "installed but the client
+was first" (0) from "working".
+
+Two design points came out of review. **The hook has a thread to itself**, which does nothing but
+pump messages: a low-level hook only runs while its thread is inside `GetMessageW`, and the
+daemon thread is busy for about a second per screenshot, so on that thread every key typed during
+a press would have waited out the system's hook timeout (300 ms by default; Windows can also
+drop a hook that times out), and the key-up of the press itself could have been missed, leaving
+the key "held" so that the next press was swallowed (the held state now also expires: a key-down
+more than 1.5 s after the last swallowed one is a new press, not a repeat; the longest keyboard
+repeat delay Windows offers is 1 s, and a real second press has a key-up before it, which clears
+the held state). The decision is a pure function (`rdp::decide`) with unit tests. The hook thread
+is started once per client window, not on every focus event, so a child window or the connection
+bar taking focus and handing it back does not tear down a working hook, and a replaced hook keeps
+the held state. **The registered
+hotkey is never removed**: an earlier version unregistered it while the hook was in charge, which
+left the key dead for the first 400 ms after focus, and dead for good if the hook failed to
+install or the hotkey could not be registered again. With both in place, the hook takes the key
+and swallows it when it is first in line, and the registered hotkey is the fallback when it is
+not.
+
+*Result.* With a real keyboard, in the same live `mstsc` session (first version, before the
+review changes): one press of ctrl+` saved `...12_03_49_761-phil-desktop - Remote Desktop
+Connection.png`. The log shows mstsc.exe gaining focus at 12:03:47, the first hook's removal at
+12:03:48 with 0 events seen, the capture at 12:03:49, and the hook reporting 7 events when focus
+left at 12:03:53.
+
+The version with the hook on its own thread and the hotkey kept registered was tried live
+afterwards: three ctrl+` presses a few seconds apart in the same session gave three files
+(`...13_13_25_645`, `...13_13_28_913`, `...13_13_32_254`), the log showing the hook installed once
+for the window and seeing 3, 98 and 15 key events over the stretches that followed. The three
+presses were seconds apart, so it did not exercise a press during a press, a held key, or a
+second press inside the second after the first. A review then changed the hook's lifetime
+(started once per window, held state kept across a reinstall, a longer repeat window); **that
+last version passes its unit tests and the end-to-end check but has not been tried live.**
+
+*Limits.* Not tested: why two install times (the log shows the first hook removed unused and the
+press arriving after the second install, which is consistent with the first being too early, but
+nothing proves it); other clients (the Windows App's executable name is a guess); a client in
+full-screen mode; a client that re-installs its own hook later than we do. **An elevated client
+is not covered by the hook**: Windows does not show a normal program the keys typed into an
+elevated window, so the hook sees nothing there and only the registered hotkey applies. **Alt-
+and Win-based combinations leak a lone modifier** to the remote machine (only the main key is
+swallowed); with Ctrl and Shift, as in the default, that is harmless, but a lone Alt can open a
+menu bar and a lone Win the Start menu.
+
+**Not verified.**
+- Claude Code's own image-paste key reading the bitmap off the clipboard from WSL (the path
+  text is the tested route).
+- Whether launching from the Run key flashes a console window at logon (never observed: the
+  autostart was only switched on and off).
+- HDR, and press-to-clipboard latency (never timed; a press measures the text, so it costs the
+  0.2-1.2 s of section 5b on top of the capture, on the thread that also waits for `--stop`).
+
 ---
 
 ## 7. Crates
@@ -494,6 +694,7 @@ spectral centroid falls within 2-6 kHz.
 | WebP lossless | `image-webp` |
 | resize | `fast_image_resize` 6 |
 | calibration cache | `serde` + `toml` |
+| hotkey, clipboard, message loop | `windows` (`RegisterHotKey`, `System::DataExchange`, `System::Memory`) |
 
 OCR uses `Windows.Media.Ocr`, part of Windows, so `calibrate` needs no feature flag or
 extra dependency. `rayon` was dropped: nothing needed it.
@@ -511,7 +712,10 @@ extra dependency. `rayon` was dropped: nothing needed it.
 6. **Sharp insets** (not built): the main image at body-text scale plus tiny crops of the
    few thin strips holding the smallest text (tab bar, legend, clock). Estimated 15-25%
    fewer tokens on screens like the laptop's; unmeasured.
-7. **Ruled out by Phil (2026-09-23):** altering colours (pre-sharpening, contrast boosts),
+7. **Hotkey in other remote-desktop clients** (section 6b): works in a live `mstsc` window
+   through a short-lived keyboard hook; the Windows App / Windows 365, Citrix and VMware clients
+   are on the list by executable name and untested, as is full-screen mode.
+8. **Ruled out by Phil (2026-09-23):** altering colours (pre-sharpening, contrast boosts),
    sending an OCR transcript alongside the image (OCR errors would reach Claude as fact),
    and collapsing blank space (distorts layout and positions). Token savings must keep
    pixels' colours, the layout, and Claude reading the image itself.

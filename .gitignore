@@ -6,5 +6,8 @@
 *.webp
 !docs/**/*.png
 
+# editor / agent tooling state
+/.serena/
+
 # skill eval runs (skill-creator workspace)
 /skill/winshot-workspace/

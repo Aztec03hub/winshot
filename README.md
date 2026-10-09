@@ -103,11 +103,74 @@ winshot fx [--display N]              # preview the flash and shutter sound, cap
 
 winshot calibrate [--display N]       # OCR-measure this display's safe downscale, cache it for --scale auto
 winshot calibrate --from shot.png     # same, on a saved image (prints only)
+
+winshot hotkey                        # global hotkey (default ctrl+backtick): screenshot the focused display
+      --key COMBO           ctrl/alt/shift/win plus one key: a letter, digit, symbol, F1-F24, printscreen
+      --dir PATH            where files go (default %USERPROFILE%\Pictures\winshot)
+      --prune-days N        also delete winshot's own files older than N days, N >= 1 (default: keep all)
+      --no-flash | --no-sound
+      --no-rdp-hook         do not read the key by a keyboard hook while a remote-desktop window has focus
+      --autostart on|off    start it at every logon (the other options are remembered)
+      --status | --stop | --log (the log's path and last 25 lines)
 ```
 
 Minimized windows are restored without taking focus, captured, and re-minimized. When
 several windows match, the topmost one with real content is taken: apps like CapCut
 keep visible-but-blank helper windows above their main window.
+
+---
+
+## The hotkey
+
+`winshot hotkey` starts a small background process (no window, no tray icon) that listens for
+one global key combination, `` ctrl+` `` by default. It works whatever has focus: WSL, a Windows
+app, a browser. On each press it:
+
+1. picks the display holding the focused window (the one under the mouse if none is focused);
+2. captures it and plays the flash and shutter, then sizes it for Claude exactly like a plain
+   `winshot` run, so the clipboard image is the one Claude reads best;
+3. saves it as `Pictures\winshot\2026-10-09_10_48_16_417-<window title>.png`: the date, the
+   time to the millisecond and the focused window's title, so repeated presses never overwrite;
+4. puts it on the clipboard **three ways at once**, and each program takes the one it
+   understands: the image (a bitmap, plus PNG), the file's Windows path as text, and the file
+   itself. A terminal or editor pastes the path, and Claude Code turns a pasted image path into
+   an attachment, as it does for Greenshot; programs that paste images get the picture.
+
+If one press needs several tiles (a very tall display), the clipboard carries only the paths,
+one per line, because a clipboard holds a single image.
+
+Quick presses each get their own frame, taken when you pressed (to grab frames of a video): the
+screenshot is grabbed at once and the slow part (measuring, saving, the clipboard) runs behind it.
+In a test with posted presses 40 ms apart, the grabs came about 50-110 ms apart. The file name's
+time is when the frame was grabbed, and the clipboard ends up holding the last one saved. Up to 7
+screenshots can be waiting to be saved; presses beyond that during a very long burst are dropped,
+logged, and beep. A held key is one press, not many.
+
+```bash
+winshot hotkey                         # start it (detached; returns in about 0.3 s)
+winshot hotkey --autostart on          # and start it at every logon from now on
+winshot hotkey --key 'ctrl+shift+f12' --prune-days 30
+winshot hotkey --status                # running / not running
+winshot hotkey --stop
+```
+
+Starting it again while it runs does nothing (stop it first to change options). A press that
+fails is written to `%LOCALAPPDATA%\winshot\hotkey.log` and beeps; the hotkey keeps running. The
+combination is taken **from every program**: `` ctrl+` `` also opens the console in Sublime Text
+and the terminal in VS Code, so those lose it while the hotkey runs; pick another with `--key`
+if that matters. `--key` refuses a combination another program already registered globally, and
+a bare key with no modifier.
+
+**Remote desktop:** the key works inside a remote-desktop window too (tried live with `mstsc`,
+a few presses; the Windows App, Citrix and VMware viewers are covered by name but untested). The client
+normally takes keys for the remote machine before Windows applies a registered hotkey, so while
+such a window has focus the key is also read by a keyboard hook, removed again when you leave it.
+The hotkey's own key is not forwarded to the remote machine (a lone Alt or Win modifier would
+still be, so prefer Ctrl/Shift combinations). The hook cannot see keys typed into an elevated
+(administrator) window. `--no-rdp-hook` turns this off; the log (`hotkey.log`) says when the hook
+is on and how many key events it saw (never which keys). Window titles become part of file names and the clipboard
+text (as with Greenshot), so a private browsing title is visible there. Design notes and what
+is not yet verified are in [`docs/DESIGN.md`](docs/DESIGN.md) section 6b.
 
 ---
 
@@ -208,11 +271,14 @@ everything is driven from WSL:
 ./build.sh test       # unit tests (palette, resampling, OCR metric, smallest text, tiling, shutter)
 python3 scripts/check-legibility.py  # synthetic text of known size: sweep, mixed sizes, tall page
 python3 scripts/check-fx.py          # flash visible on screen, absent from the shot; sound plays
+python3 scripts/check-hotkey.py      # a hotkey press -> files + clipboard, pixels compared (stop your own hotkey first; --inject sends real keys)
 python3 scripts/count-tokens.py *.png   # exact token cost per image from the API (needs a key; free)
 python3 scripts/claude-legibility.py --dry-run   # Claude's own threshold; a real run ~$0.40 (estimate)
 ```
 
-`install.sh` backs up an existing v0 `~/.local/bin/winshot` to `winshot.v0.bak`.
+`install.sh` backs up an existing v0 `~/.local/bin/winshot` to `winshot.v0.bak`. A running
+hotkey keeps `winshot.exe` locked, so the script stops it before copying and tells you to
+start it again (it comes back by itself at logon if `--autostart on` was set).
 
 The shim translates absolute WSL paths (`-o`, `--from`) to Windows paths and maps the
 printed result back. Relative paths need no help: a Windows process launched from WSL

@@ -10,6 +10,14 @@ DEST=$(wslpath -u "$LOCALAPPDATA_WIN")/winshot
 BUILT=$(wslpath -u "${WINSHOT_TARGET_DIR:-$LOCALAPPDATA_WIN\\winshot-build\\target}")/release/winshot.exe
 # The exe lives on NTFS: launching it from \\wsl.localhost would add startup cost.
 mkdir -p "$DEST" "$BIN"
+# A running hotkey keeps winshot.exe locked; stop it, copy, and start it again.
+HOTKEY_WAS_RUNNING=
+hotkey_note() { [[ -z "$HOTKEY_WAS_RUNNING" ]] || echo "the hotkey was stopped to update winshot.exe; start it again with: winshot hotkey (it comes back by itself at logon if --autostart on was set)"; }
+trap hotkey_note EXIT # also when a later step fails, so the user is never left with it silently off
+if [[ -x "$DEST/winshot.exe" ]] && [[ "$("$DEST/winshot.exe" hotkey --status 2>/dev/null | tr -d '\r')" == running ]]; then
+  HOTKEY_WAS_RUNNING=1
+  "$DEST/winshot.exe" hotkey --stop >/dev/null # waits until the process is gone and has released the exe
+fi
 cp "$BUILT" "$DEST/winshot.exe"
 if [[ -e "$BIN/winshot" ]] && ! grep -q 'WSL front-end for winshot.exe' "$BIN/winshot"; then
   cp "$BIN/winshot" "$BIN/winshot.v0.bak"
